@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# 字形資料 29MB,不進版控。安裝方式見 README
+sugar_arm/data/graphics.txt
+
+# 產出物(每次跑都會重生)
+*.as
+!sugar_arm/arm/*.as
+*_preview.png
+*_path.json
+*.pts.json
+sugar_arm/raw.svg
+sugar_arm/corgi.svg
+sugar_arm/corgi_path.json
+
+# 測試素材(網路來源,版權未確認)
+*.jpg
+*.jpeg
+*.webp
