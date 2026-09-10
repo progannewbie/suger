@@ -19,16 +19,17 @@ BREAK_SETTLE = 0.05          # BREAK 等待到位的沉降時間估計 s
 ACC_PENALTY  = 0.15          # 每次啟停的加減速額外時間估計 s
 
 class Arm:
-    """對應 sugar_server.as 的狀態"""
+    """對應 sugar_server.as 的狀態機。收 -> 緩衝 -> run 才執行。"""
     def __init__(self, zup, sig, vdraw, vtrav, acc):
-        self.zup, self.sig = zup, sig
-        self.vdraw, self.vtrav, self.acc = vdraw, vtrav, acc
-        self.airj = 0
+        self.zup, self.sig, self.acc = zup, sig, acc
+        self.vtrav = vtrav
         self.base = (450.0, 0.0, -120.0, 0.0, 180.0, 0.0)
-        self.buf = []                       # (x, y, v)
+        self.buf = []                       # 緩衝的動作
         self.trace, self.path, self.t = [], [], 0.0
-        self.here = None                    # 目前 XY,None = 未知
-        self.n = {}                         # 指令計數
+        self.here = None
+        self.pen = False
+        self.lastv = -1
+        self.n = {}
 
     def emit(self, line, dt=0.0, kind=None):
         self.trace.append(line)
@@ -36,87 +37,71 @@ class Arm:
         if kind:
             self.n[kind] = self.n.get(kind, 0) + 1
 
-    def move(self, x, y, v, kind, pen):
+    def _go(self, x, y, v):
         d = 0.0 if self.here is None else math.dist(self.here, (x, y))
         self.here = (x, y)
-        self.path.append((x, y, v, pen))
+        self.path.append((x, y, v, self.pen))
         return d / max(v, 1e-6)
 
-    # ---- 協定指令,對應 AS 的 CASE 分支 ----
+    def _speed(self, v):
+        if v != self.lastv:
+            self.emit(f"  SPEED {v:g} MM/S ALWAYS", 0.0, "SPEED")
+            self.lastv = v
+
+    # ---- 協定,對應 AS 的 sub_exec ----
     def cmd(self, line):
+        for one in line.split("\n"):
+            one = one.strip()
+            if not one:
+                continue
+            if not self._one(one):
+                return False
+        return True
+
+    def _one(self, line):
         f = line.split(",")
         c = f[0]
-        if c == "BASE":
+        if c == "base":
             self.base = tuple(float(x) for x in f[1:7])
             self.emit(f"  base = TRANS({','.join(f[1:7])})")
-        elif c == "SPD":
-            self.vdraw, self.vtrav, self.acc = (float(x) for x in f[1:4])
+        elif c == "acc":
+            self.acc = float(f[1])
             self.emit(f"  ACCURACY {self.acc:g} ALWAYS")
-        elif c == "AIR":
-            self.airj = int(float(f[1]))
-        elif c == "BEG":
+        elif c == "clr":
             self.buf = []
-        elif c == "PT":
-            n = f[1:]
-            for i in range(0, len(n) - 2, 3):
-                self.buf.append((float(n[i]), float(n[i+1]), float(n[i+2])))
-        elif c == "RUN":
+        elif c in ("lmove", "jmove", "ldepart", "sig", "wait", "brk"):
+            self.buf.append(f)
+        elif c == "run":
             self.run()
-        elif c == "DOT":
-            self.dot(float(f[1]), float(f[2]), float(f[3]))
-        elif c == "HOME":
-            self.emit(f"  SIGNAL -{self.sig}")
-            self.emit(f"  SPEED {self.vtrav:g} MM/S ALWAYS")
-            self.emit(f"  LDEPART {self.zup:g}", self.zup/self.vtrav, "LDEPART")
-            self.emit(f"  JAPPRO SHIFT(base BY 0,0,0), {self.zup:g}",
-                      self.move(0, 0, self.vtrav, "JAPPRO", False), "JAPPRO")
-            self.emit("  BREAK", BREAK_SETTLE)
-        elif c == "END":
-            self.emit(f"  SIGNAL -{self.sig}")
+            self.buf = []
+        elif c == "end":
             return False
         return True
 
     def run(self):
-        if len(self.buf) < 2:
-            return
-        x1, y1, _ = self.buf[0]
-        appro = "JAPPRO" if self.airj else "LAPPRO"
-        self.emit(f"; ---- 筆劃開始,{len(self.buf)} 點 ----")
-        self.emit(f"  SPEED {self.vtrav:g} MM/S ALWAYS")
-        self.emit(f"  {appro} SHIFT(base BY {x1:.2f},{y1:.2f},0), {self.zup:g}",
-                  self.move(x1, y1, self.vtrav, appro, False), appro)
-        self.emit(f"  LMOVE SHIFT(base BY {x1:.2f},{y1:.2f},0)",
-                  self.zup / self.vtrav + ACC_PENALTY, "LMOVE")
-        self.emit("  BREAK", BREAK_SETTLE)
-        self.emit(f"  SIGNAL {self.sig}")
-        self.emit("  TWAIT 0.15", 0.15)
-
-        last = -1
-        for x, y, v in self.buf[1:]:
-            if v != last:
-                self.emit(f"  SPEED {v:g} MM/S ALWAYS", 0.0, "SPEED")
-                last = v
-            self.emit(f"  LMOVE SHIFT(base BY {x:.2f},{y:.2f},0)",
-                      self.move(x, y, v, "LMOVE", True), "LMOVE")
-        self.emit("  BREAK", BREAK_SETTLE)
-        self.emit(f"  SIGNAL -{self.sig}")
-        self.emit("  TWAIT 0.10", 0.10)
-        self.emit(f"  SPEED {self.vtrav:g} MM/S ALWAYS")
-        self.emit(f"  LDEPART {self.zup:g}",
-                  self.zup/self.vtrav + ACC_PENALTY, "LDEPART")
-        self.buf = []
-
-    def dot(self, x, y, dt):
-        appro = "JAPPRO" if self.airj else "LAPPRO"
-        self.emit(f"  {appro} SHIFT(base BY {x:.2f},{y:.2f},0), {self.zup:g}",
-                  self.move(x, y, self.vtrav, appro, False), appro)
-        self.emit(f"  LMOVE SHIFT(base BY {x:.2f},{y:.2f},0)",
-                  self.zup/self.vtrav, "LMOVE")
-        self.emit("  BREAK", BREAK_SETTLE)
-        self.emit(f"  SIGNAL {self.sig}")
-        self.emit(f"  TWAIT {dt:g}", dt)
-        self.emit(f"  SIGNAL -{self.sig}")
-        self.emit(f"  LDEPART {self.zup:g}", self.zup/self.vtrav, "LDEPART")
+        for f in self.buf:
+            c = f[0]
+            if c in ("lmove", "jmove"):
+                x, y, z, v = (float(q) for q in f[1:5])
+                self._speed(v)
+                AS = "LMOVE" if c == "lmove" else "JMOVE"
+                dt = self._go(x, y, v) if z == 0 or self.here is None else \
+                     self._go(x, y, v) + abs(z) / v
+                self.emit(f"  {AS} SHIFT(base BY {x:.2f},{y:.2f},{z:g})", dt, AS)
+            elif c == "ldepart":
+                dist, v = float(f[1]), float(f[2])
+                self._speed(v)
+                self.pen = False
+                self.emit(f"  LDEPART {dist:g}", dist / v, "LDEPART")
+            elif c == "sig":
+                n = int(float(f[1]))
+                self.pen = n > 0
+                self.emit(f"  SIGNAL {n}", 0.0, "SIGNAL")
+            elif c == "wait":
+                t = float(f[1])
+                self.emit(f"  TWAIT {t:g}", t, "TWAIT")
+            elif c == "brk":
+                self.emit("  BREAK", BREAK_SETTLE + ACC_PENALTY, "BREAK")
 
 def plot(path, out, bead):
     from PIL import Image, ImageDraw
@@ -205,10 +190,12 @@ def main():
         import stream
         d = json.load(open(v.json))
         cmds, _ = stream.build_commands(
-            d, v.base, v.draw_speed, v.max_speed, v.travel_speed,
-            v.accuracy, v.speed_quant, v.air_move, v.dot_ms)
+            d, v.base, v.accuracy, zup=v.zup, sig=v.signal,
+            draw_speed=v.draw_speed, max_speed=v.max_speed,
+            travel_speed=v.travel_speed, speed_quant=v.speed_quant,
+            air_move=v.air_move, dot_ms=v.dot_ms)
         n = run_offline(arm, cmds)
-        src = f"{n} 個封包(離線,完全沒用到網路)"
+        src = f"{n} 個動作指令(離線,完全沒用到網路)"
 
     arm.emit(".END")
     open(v.trace, "w").write("\n".join(arm.trace) + "\n")
@@ -218,8 +205,7 @@ def main():
     print(f"展開成 {len(arm.trace)} 行 AS,其中動作指令 {tot} 個:")
     for k in sorted(arm.n, key=lambda x: -arm.n[x]):
         print(f"    {k:8s} {arm.n[k]:5d}")
-    lifts = arm.n.get("LAPPRO", 0) + arm.n.get("JAPPRO", 0)
-    print(f"\n預估時間 {arm.t:.1f} 秒 (抬筆落筆 {lifts} 次)")
+    print(f"\n預估時間 {arm.t:.1f} 秒 (抬筆 {arm.n.get('LDEPART', 0)} 次)")
     print(f"AS 動作序列 -> {v.trace}")
     if v.plot:
         plot(arm.path, v.plot, v.bead)

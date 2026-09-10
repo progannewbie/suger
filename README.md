@@ -116,19 +116,39 @@ TCP_END_LISTEN ret, port
 
 ### 通訊協定
 
+**一行一個動作,自帶型態。** 手臂端不需要知道自己在畫什麼。
+
 ```
-BEG,<點數>              宣告一筆劃
-PT,x,y,v,x,y,v,...      直線點,每點帶速度。單封包 ≤250 字元
-RUN                     一次連續走完緩衝區
-DOT,x,y,秒              糖點
-BASE,x,y,z,o,a,t        畫布原點
-SPD,畫線,空走,精度
-AIR,0|1                 空中移動 0=LAPPRO 1=JAPPRO
-HOME / END
+lmove,x,y,z,v      直線插補到 base 偏移 (x,y,z),速度 v mm/s
+jmove,x,y,z,v      關節插補
+ldepart,d,v        沿工具 Z 軸退開 d mm(抬筆,保證垂直)
+sig,n              n 正=開 負=關(糖閥)
+wait,t             停留 t 秒
+brk                等動作到位
+base,x,y,z,o,a,t   畫布原點(立即)
+acc,n              精度 mm(立即)
+run                一次連續執行緩衝區
+clr / end
 ```
 
-手臂每收一行回 `OK` 或 `ER`。兩邊都不加換行 —— AS 的 `TCP_SEND` 不會補 `\n`,
-framing 靠「送一行就等回覆」。
+一個封包用換行塞多個動作,上限 250 字元。手臂每收一包回 `OK` 或 `ER`。
+兩邊都不加換行當封包結尾 —— AS 的 `TCP_SEND` 不會補 `\n`,
+用 `readline()` 等換行會卡死,framing 靠「送一包就等回覆」。
+
+**手臂程式是固定的。** `sugar_server.as` 載進控制器就不用再改 ——
+它完全不知道什麼是糖畫,只做收字串、存緩衝、照順序執行。
+所有決策都在 PC 端。
+
+### 離線模擬
+
+上機前先看手臂會收到什麼,不接機台不開網路:
+
+```bash
+$PY sugar_arm/sim.py points.json --base 450,0,-120 --trace trace.as --plot sim.png
+```
+
+用跟 `sugar_server.as` 完全一樣的狀態機把協定展開成 AS 動作序列。
+加 `--serve` 改成當假手臂等 TCP 連線,兩種模式輸出完全相同。
 
 ## 檔案
 
@@ -139,6 +159,7 @@ framing 靠「送一行就等回覆」。
 | `sugar_arm/svgout.py` | 共用 SVG 輸出格式 |
 | `sugar_arm/svg2points.py` | SVG → 手臂座標(Skill 2) |
 | `sugar_arm/stream.py` | 座標 → 通訊字串(Skill 3) |
+| `sugar_arm/sim.py` | 離線模擬手臂會執行哪些動作 |
 | `sugar_arm/arm/sugar_server.as` | 手臂端常駐接收程式 |
 | `sugar_arm/path2as.py` | 舊路線:直接產 .as 檔上傳 |
 | `sugar_arm/svg2path.py` | 備援:手繪 SVG → 座標 |

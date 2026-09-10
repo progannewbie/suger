@@ -1,52 +1,67 @@
 ; =====================================================================
-; sugar_server.as -- 糖畫手臂端常駐接收程式 (Kawasaki F60 / AS Language)
+; sugar_server.as -- 通用動作序列執行器 (Kawasaki F60 / AS Language)
 ;
-; PC 端算好所有點位,透過 TCP 傳字串進來;手臂只負責解析與執行。
+; 這支程式是「固定的」—— 載進控制器之後就不用再改。
+; 它完全不知道什麼是糖畫、什麼是筆劃、什麼是毛筆。
+; 它只做三件事:收字串、存進緩衝、照順序執行。
 ;
-; 核心設計:先收滿一整筆劃再動,不是收一點動一點。
-;   一問一答式的即時執行會變成 stop-and-go,每個停頓就是一坨糖。
-;   PT 只填陣列不動作,收到 RUN 才一次連續走完。
+; 所有決策(走哪裡、多快、什麼時候開糖閥、停多久)都在 PC 端算好,
+; 用字串送進來。要換成畫別的東西,改 PC 端就好,這支不用動。
 ;
 ; ---------------------------------------------------------------------
-; 指令簽名全部查證自「F控通訊選項手冊90210-1344DE.pdf」1.6 節:
+; 協定:一行一個動作,自帶型態。多個動作可以用換行塞在同一個封包裡。
 ;
-;   TCP_LISTEN     ret, port                          ret=0 成功
-;   TCP_ACCEPT     ret, port, timeout, ipa[0]         ret=socket ID(>=0)
-;   TCP_SEND       ret, sock, $sbuf[0], 元素數, timeout   ret=0 成功
-;   TCP_RECV       ret, sock, $rbuf[0], 元素數變數, timeout, 每元素字元上限
-;   TCP_CLOSE      ret, sock                          ret=0 成功
-;   TCP_END_LISTEN ret, port                          ret=0 成功
+;   緩衝型(存起來,收到 run 才一起執行):
+;     lmove,x,y,z,v      直線插補到 base 偏移 (x,y,z),速度 v mm/s
+;     jmove,x,y,z,v      關節插補,同上
+;     ldepart,d,v        沿「工具 Z 軸」退開 d mm(抬筆用,保證垂直)
+;     sig,n              n 正數=開,負數=關。糖閥就是這個
+;     wait,t             停留 t 秒
+;     brk                等動作完全到位
 ;
-; 手冊列出的限制:
-;   埠號範圍       8192 - 65535        (p.1-33)
-;   timeout        1 - 60 秒,預設 1   (p.1-34)
-;   每元素字元上限  1 - 255,預設 255   (p.1-41)  <- 對應 E4007
-;   單次收發上限    4096 bytes          (p.1-38/1-40)
-;   通訊錯誤不會停止程式,錯誤碼存進 ret;唯獨 TCP_ACCEPT 進行中出錯會停
+;   立即型(不進緩衝,馬上做):
+;     base,x,y,z,o,a,t   設定畫布原點
+;     acc,n              設定精度 mm
+;     run                一次連續執行緩衝區,然後清空
+;     clr                清空緩衝
+;     end                收工
 ;
-; ret 預設 999 再 WAIT (ret<>999):照 90210-1342DE p.56 範例的寫法,
-; 這些指令可能非同步完成,先等它結束比較保險。
+; 每收一行回 "OK" 或 "ER"。
+;
+; 為什麼要緩衝:一問一答式的即時執行會變成 stop-and-go,
+; 每個往返停頓都是一坨糖。所以先收滿一整筆劃,收到 run 才連續走完。
 ; ---------------------------------------------------------------------
+;
+; 指令簽名查證自你的手冊:
+;   TCP_LISTEN     ret, port                    F控通訊選項手冊 90210-1344DE p.1-33
+;   TCP_ACCEPT     ret, port, timeout, ipa[0]   同上 p.1-34,ret=socket ID
+;   TCP_SEND       ret, sock, $sbuf[0], 元素數, timeout    同上 p.1-38
+;   TCP_RECV       ret, sock, $rbuf[0], 元素數變數, timeout, 字元上限  同上 p.1-40
+;   TCP_CLOSE      ret, sock                    同上 p.1-42
+;   TCP_END_LISTEN ret, port                    同上 p.1-43
+;   LDEPART        distance                     AS 語言參考手冊 90209-1025DE p.6-6
+;
+; 限制:埠號 8192-65535、timeout 1-60 秒、每元素上限 255 字元(E4007)、
+;       單次收發 4096 bytes、需要 Ethernet 選購板卡(否則 E4054)
+;
+; $DECODE 會「消耗」原字串,不是照索引取欄位:
+;   $DECODE(s$, ",", 0)  取出分隔符前的內容並移除
+;   $DECODE(s$, ",", 1)  取出分隔符本身並移除
+; 出處:F控傳送裝置同步功能 90210-1342DE p.56
+; =====================================================================
 
 .PROGRAM sugar_server()
 
-; ---------- 可調參數 ----------
-  port  = 10000                ; 監聽埠。必須落在 8192-65535
-  maxpt = 2000                 ; 緩衝點數上限
-  sig   = 1                    ; 糖閥輸出訊號 DO 編號
-  zup   = 15                   ; 抬筆高度 mm
-  vdraw = 60                   ; 基準畫線速度 mm/s
-  vtrav = 300                  ; 空走速度 mm/s
-  acc   = 3                    ; 精度 mm。放大讓轉角連續走,不要設 0
-  tmo   = 30                   ; 通訊逾時 秒。手冊上限 60
-  airj  = 0                    ; 空中移動 0=LAPPRO(直線,安全) 1=JAPPRO(關節,快)
-  base  = TRANS(450,0,-120,0,180,0)   ; 畫布原點,三點校正後覆蓋
+  port  = 10000              ; 監聽埠。必須落在 8192-65535
+  maxop = 3000               ; 緩衝動作數上限
+  tmo   = 30                 ; 通訊逾時 秒。手冊上限 60
+  base  = TRANS(450,0,-120,0,180,0)   ; 畫布原點,PC 端會用 base 指令覆蓋
 
-  SIGNAL -sig                  ; 確認糖閥關閉
-  SPEED vtrav MM/S ALWAYS
-  ACCURACY acc ALWAYS
-  npt  = 0
+  SPEED 100 MM/S ALWAYS
+  ACCURACY 3 ALWAYS
+  nop  = 0
   quit = 0
+  eol$ = $CHR(10)            ; 封包內的動作分隔符。控制器若不吃換行,改成 ";"
 
 ; ---------- 建立連線 ----------
   ret = 999
@@ -57,7 +72,7 @@
     GOTO 900
   END
 
-50 sock = 999                  ; ACCEPT 逾時就再等,直到 PC 接進來
+50 sock = 999                ; ACCEPT 逾時上限 60 秒,逾時就再等
   TCP_ACCEPT sock, port, 60, ipa[0]
   WAIT (sock<>999)
   IF sock < 0 THEN
@@ -66,87 +81,23 @@
   END
   TYPE "connected from ", ipa[0], ".", ipa[1], ".", ipa[2], ".", ipa[3]
 
-; ---------- 主迴圈:收字串 -> 解析 -> 動作 ----------
+; ---------- 主迴圈 ----------
 100 WHILE quit == 0 DO
-    CALL sub_recv                        ; 收一行進 line$
-    IF LEN(line$) == 0 THEN
+    CALL sub_recv                      ; 收一包進 pkt$
+    IF LEN(pkt$) == 0 THEN
       GOTO 100
     END
-    CALL sub_next                        ; 砍出指令字 -> fld$
-
-    CASE fld$ OF
-      VALUE "BEG":                       ; BEG,<點數>  開始一筆劃
-        npt = 0
-        CALL sub_ok
-
-      VALUE "PT":                        ; PT,x,y,v,x,y,v,...  直線點
-        CALL sub_points
-        CALL sub_ok
-
-      VALUE "AIR":                       ; AIR,0|1  空中移動的插補方式
-        CALL sub_next
-        airj = VAL(fld$)
-        CALL sub_ok
-
-      VALUE "RUN":                       ; RUN  一次連續走完緩衝區
-        CALL sub_run
-        CALL sub_ok
-
-      VALUE "DOT":                       ; DOT,x,y,秒
-        CALL sub_next
-        dx = VAL(fld$)
-        CALL sub_next
-        dy = VAL(fld$)
-        CALL sub_next
-        dt = VAL(fld$)
-        CALL sub_dot
-        CALL sub_ok
-
-      VALUE "BASE":                      ; BASE,x,y,z,o,a,t
-        CALL sub_next
-        bx = VAL(fld$)
-        CALL sub_next
-        by = VAL(fld$)
-        CALL sub_next
-        bz = VAL(fld$)
-        CALL sub_next
-        bo = VAL(fld$)
-        CALL sub_next
-        ba = VAL(fld$)
-        CALL sub_next
-        bt = VAL(fld$)
-        base = TRANS(bx, by, bz, bo, ba, bt)
-        CALL sub_ok
-
-      VALUE "SPD":                       ; SPD,畫線,空走,精度
-        CALL sub_next
-        vdraw = VAL(fld$)
-        CALL sub_next
-        vtrav = VAL(fld$)
-        CALL sub_next
-        acc = VAL(fld$)
-        ACCURACY acc ALWAYS
-        CALL sub_ok
-
-      VALUE "HOME":
-        SIGNAL -sig
-        SPEED vtrav MM/S ALWAYS
-        LDEPART zup                      ; 先垂直退開再移動,避免橫向刮過成品
-        JAPPRO SHIFT(base BY 0, 0, 0), zup
-        BREAK
-        CALL sub_ok
-
-      VALUE "END":
-        quit = 1
-        CALL sub_ok
-
-      ANY:
-        CALL sub_err
+110 line$ = $DECODE(pkt$, eol$, 0)     ; 一包可能有多行,逐行處理
+    dmy$ = $DECODE(pkt$, eol$, 1)
+    IF LEN(line$) > 0 THEN
+      CALL sub_exec
     END
+    IF LEN(pkt$) > 0 THEN
+      GOTO 110
+    END
+    CALL sub_ok
   END
 
-; ---------- 收工 ----------
-  SIGNAL -sig
   ret = 999
   TCP_CLOSE ret, sock
   WAIT (ret<>999)
@@ -157,12 +108,109 @@
 
 
 ; =====================================================================
-; sub_next  從 line$ 砍下一個欄位放進 fld$
-;
-;   $DECODE 會「消耗」原字串,不是照索引取欄位:
-;     $DECODE(s$, ",", 0)  取出分隔符前的內容並移除
-;     $DECODE(s$, ",", 1)  取出分隔符本身並移除
-;   出處:90210-1342DE p.56 的 vision 範例
+; sub_exec  解析一行並處理
+; =====================================================================
+.PROGRAM sub_exec()
+  CALL sub_next
+  cmd$ = fld$
+
+  CASE cmd$ OF
+    VALUE "lmove":                     ; lmove,x,y,z,v
+      CALL sub_push
+      op[nop] = 1
+
+    VALUE "jmove":                     ; jmove,x,y,z,v
+      CALL sub_push
+      op[nop] = 2
+
+    VALUE "ldepart":                   ; ldepart,d,v
+      IF nop < maxop THEN
+        nop = nop + 1
+        CALL sub_next
+        pz[nop] = VAL(fld$)            ; 退開距離
+        CALL sub_next
+        pv[nop] = VAL(fld$)
+        op[nop] = 3
+      END
+
+    VALUE "sig":                       ; sig,n   正開負關
+      IF nop < maxop THEN
+        nop = nop + 1
+        CALL sub_next
+        pv[nop] = VAL(fld$)
+        op[nop] = 4
+      END
+
+    VALUE "wait":                      ; wait,t
+      IF nop < maxop THEN
+        nop = nop + 1
+        CALL sub_next
+        pv[nop] = VAL(fld$)
+        op[nop] = 5
+      END
+
+    VALUE "brk":                       ; brk
+      IF nop < maxop THEN
+        nop = nop + 1
+        op[nop] = 6
+      END
+
+    VALUE "base":                      ; base,x,y,z,o,a,t  立即生效
+      CALL sub_next
+      bx = VAL(fld$)
+      CALL sub_next
+      by = VAL(fld$)
+      CALL sub_next
+      bz = VAL(fld$)
+      CALL sub_next
+      bo = VAL(fld$)
+      CALL sub_next
+      ba = VAL(fld$)
+      CALL sub_next
+      bt = VAL(fld$)
+      base = TRANS(bx, by, bz, bo, ba, bt)
+
+    VALUE "acc":                       ; acc,n  立即生效
+      CALL sub_next
+      ACCURACY VAL(fld$) ALWAYS
+
+    VALUE "run":                       ; run  執行緩衝
+      CALL sub_run
+      nop = 0
+
+    VALUE "clr":
+      nop = 0
+
+    VALUE "end":
+      quit = 1
+
+    ANY:
+      CALL sub_err
+  END
+.END
+
+
+; =====================================================================
+; sub_push  讀 x,y,z,v 存進緩衝
+; =====================================================================
+.PROGRAM sub_push()
+  IF nop >= maxop THEN
+    RETURN
+  END
+  nop = nop + 1
+  CALL sub_next
+  px[nop] = VAL(fld$)
+  CALL sub_next
+  py[nop] = VAL(fld$)
+  CALL sub_next
+  pz[nop] = VAL(fld$)
+  CALL sub_next
+  pv[nop] = VAL(fld$)
+.END
+
+
+; =====================================================================
+; sub_next  從 line$ 砍下一個逗號分隔的欄位放進 fld$
 ; =====================================================================
 .PROGRAM sub_next()
   fld$ = $DECODE(line$, ",", 0)
@@ -171,109 +219,63 @@
 
 
 ; =====================================================================
-; PT,x,y,v,x,y,v,...   把封包裡的點附加到緩衝陣列
-;   v 是該點的速度 mm/s。毛筆粗細就是靠它做出來的:
-;   糖流量固定 -> 線寬 x 速度 = 常數 -> 走得慢就粗
-; =====================================================================
-.PROGRAM sub_points()
-200 IF npt >= maxpt THEN
-    RETURN
-  END
-  CALL sub_next
-  IF LEN(fld$) == 0 THEN                 ; 這包收完了
-    RETURN
-  END
-  vx = VAL(fld$)
-  CALL sub_next
-  vy = VAL(fld$)
-  CALL sub_next
-  IF LEN(fld$) == 0 THEN                 ; 欄位不成三組,丟棄
-    RETURN
-  END
-  npt = npt + 1
-  px[npt] = vx
-  py[npt] = vy
-  pv[npt] = VAL(fld$)
-  GOTO 200
-.END
-
-
-; =====================================================================
-; RUN  執行緩衝區裡的整條筆劃
+; sub_run  照順序執行緩衝區裡的動作
 ;
-;   線段之間「絕對不放 BREAK」—— 放了控制器會逐點停,
-;   糖在每個停頓點積成一坨。靠 ACCURACY + ALWAYS 讓它連續 blend。
-;   只有下筆前和抬筆前才 BREAK。
+;   移動指令之間「絕對不放 BREAK」—— 放了控制器會逐點停,
+;   在糖畫的場合每個停頓都是一坨糖。要等到位就由 PC 端明確送 brk。
+;   靠 ACCURACY + ALWAYS 讓控制器把轉角連續 blend 過去。
 ; =====================================================================
 .PROGRAM sub_run()
-  IF npt < 2 THEN
-    RETURN
-  END
-
-  SPEED vtrav MM/S ALWAYS
-  IF airj == 1 THEN
-    JAPPRO SHIFT(base BY px[1], py[1], 0), zup   ; 關節插補到起點上方,較快
-  ELSE
-    LAPPRO SHIFT(base BY px[1], py[1], 0), zup   ; 直線插補,路徑可預測
-  END
-  LMOVE SHIFT(base BY px[1], py[1], 0)           ; 下筆一定要垂直
-  BREAK                                  ; 確認真的到位才開閥
-
-  SIGNAL sig                             ; 開糖閥
-  TWAIT 0.15                             ; 等糖絲成形
-
   lastv = -1
-  FOR i = 2 TO npt
-    IF pv[i] <> lastv THEN
-      SPEED pv[i] MM/S ALWAYS            ; 只有變速才下指令
-      lastv = pv[i]
+  FOR i = 1 TO nop
+    CASE op[i] OF
+      VALUE 1:                         ; lmove
+        IF pv[i] <> lastv THEN
+          SPEED pv[i] MM/S ALWAYS
+          lastv = pv[i]
+        END
+        LMOVE SHIFT(base BY px[i], py[i], pz[i])
+
+      VALUE 2:                         ; jmove
+        IF pv[i] <> lastv THEN
+          SPEED pv[i] MM/S ALWAYS
+          lastv = pv[i]
+        END
+        JMOVE SHIFT(base BY px[i], py[i], pz[i])
+
+      VALUE 3:                         ; ldepart 沿工具 Z 退開
+        IF pv[i] <> lastv THEN
+          SPEED pv[i] MM/S ALWAYS
+          lastv = pv[i]
+        END
+        LDEPART pz[i]
+
+      VALUE 4:                         ; sig
+        SIGNAL pv[i]
+
+      VALUE 5:                         ; wait
+        TWAIT pv[i]
+
+      VALUE 6:                         ; brk
+        BREAK
     END
-    LMOVE SHIFT(base BY px[i], py[i], 0)
   END
-
-  BREAK
-  SIGNAL -sig                            ; 關糖閥
-  TWAIT 0.10                             ; 等糖絲斷
-  SPEED vtrav MM/S ALWAYS
-  LDEPART zup                            ; 沿噴嘴軸垂直退開,不會刮到成品
-  npt = 0
-.END
-
-
-; =====================================================================
-; DOT  糖點:停在原地開閥,直徑靠停留時間控制
-; =====================================================================
-.PROGRAM sub_dot()
-  SPEED vtrav MM/S ALWAYS
-  IF airj == 1 THEN
-    JAPPRO SHIFT(base BY dx, dy, 0), zup
-  ELSE
-    LAPPRO SHIFT(base BY dx, dy, 0), zup
-  END
-  LMOVE SHIFT(base BY dx, dy, 0)
-  BREAK
-  SIGNAL sig
-  TWAIT dt
-  SIGNAL -sig
-  TWAIT 0.10
-  LDEPART zup
 .END
 
 
 ; =====================================================================
 ; 通訊底層
-;   收發都不加換行:靠「一問一答」framing,PC 送一行就等回覆,
-;   所以每次 TCP_RECV 剛好拿到一整行。
+;   收發都不加換行字元。framing 靠「送一包就等回覆」。
 ; =====================================================================
 .PROGRAM sub_recv()
-  line$ = ""
+  pkt$ = ""
   ret = 999
   rcnt = 0
   TCP_RECV ret, sock, $rbuf[0], rcnt, tmo, 255
   WAIT (ret<>999)
   IF ret == 0 THEN
     IF rcnt >= 1 THEN
-      line$ = $rbuf[0]
+      pkt$ = $rbuf[0]
     END
   END
 .END

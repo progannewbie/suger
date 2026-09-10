@@ -30,7 +30,7 @@ def w2speed(w, vdraw, vmax, quant):
     v = min(max(v, vdraw), vmax)
     return round(round(v / quant) * quant, 1)
 
-def pt_packets(stroke, speeds):
+def _unused_pt_packets(stroke, speeds):
     """把點切成不超過 250 字元的 PT 封包(手冊上限 255,留餘裕)"""
     out, cur = [], "PT"
     for (x, y), v in zip(stroke, speeds):
@@ -42,35 +42,83 @@ def pt_packets(stroke, speeds):
         out.append(cur)
     return out
 
-def build_commands(d, base=None, draw_speed=60.0, max_speed=0, travel_speed=300.0,
-                   accuracy=3.0, speed_quant=20.0, air_move="lmove", dot_ms=120.0):
-    """把 points.json 變成一串協定指令。不碰網路 —— sim.py 離線模擬也用這支。"""
+def build_ops(d, zup=15.0, sig=1, draw_speed=60.0, max_speed=0,
+              travel_speed=300.0, speed_quant=20.0, air_move="lmove",
+              dwell=0.15, cut=0.10, dot_ms=120.0):
+    """把座標變成一串動作指令。每行一個動作,自帶型態。
+
+    所有糖畫邏輯都在這裡 —— 什麼時候開閥、停多久、怎麼抬筆。
+    手臂端只是照順序執行,完全不知道自己在畫糖。
+    """
     strokes = d["strokes"]
     widths = d.get("widths")
     dots = d.get("dots", [])
     vmax = max_speed or draw_speed * 4
-    out, info = [], []
-
-    if base:
-        b = [float(x) for x in base.split(",")] if isinstance(base, str) else list(base)
-        if len(b) == 3:
-            b += [0.0, 180.0, 0.0]            # 工具朝下
-        out.append("BASE," + ",".join(f"{x:g}" for x in b))
-    out.append(f"SPD,{draw_speed:g},{travel_speed:g},{accuracy:g}")
-    out.append(f"AIR,{1 if air_move == 'jmove' else 0}")
+    air = "jmove" if air_move == "jmove" else "lmove"
+    ops, info = [], []
 
     for i, st in enumerate(strokes):
         w = widths[i] if widths else [1.0] * len(st)
         sp = [w2speed(x, draw_speed, vmax, speed_quant) for x in w]
         info.append((len(st), min(sp), max(sp)))
-        out.append(f"BEG,{len(st)}")
-        out += pt_packets(st, sp)
-        out.append("RUN")
+        x0, y0 = st[0]
+        ops.append("clr")
+        ops.append(f"{air},{x0:.2f},{y0:.2f},{zup:g},{travel_speed:g}")  # 移到起點上方
+        ops.append(f"lmove,{x0:.2f},{y0:.2f},0,{travel_speed:g}")        # 垂直下筆
+        ops.append("brk")                       # 確認到位才開閥
+        ops.append(f"sig,{sig}")                # 開糖閥
+        ops.append(f"wait,{dwell:g}")           # 等糖絲成形
+        for (x, y), v in zip(st[1:], sp[1:]):
+            ops.append(f"lmove,{x:.2f},{y:.2f},0,{v:g}")
+        ops.append("brk")
+        ops.append(f"sig,-{sig}")               # 關糖閥
+        ops.append(f"wait,{cut:g}")             # 等糖絲斷
+        ops.append(f"ldepart,{zup:g},{travel_speed:g}")   # 沿工具軸垂直抬筆
+        ops.append("run")
+
     for (x, y, dia) in dots:
-        out.append(f"DOT,{x:.2f},{y:.2f},{dot_ms*dia/1000:.3f}")
-    out.append("HOME")
-    out.append("END")
-    return out, info
+        ops.append("clr")
+        ops.append(f"{air},{x:.2f},{y:.2f},{zup:g},{travel_speed:g}")
+        ops.append(f"lmove,{x:.2f},{y:.2f},0,{travel_speed:g}")
+        ops.append("brk")
+        ops.append(f"sig,{sig}")
+        ops.append(f"wait,{dot_ms*dia/1000:.3f}")        # 停越久糖越多
+        ops.append(f"sig,-{sig}")
+        ops.append(f"wait,{cut:g}")
+        ops.append(f"ldepart,{zup:g},{travel_speed:g}")
+        ops.append("run")
+
+    ops.append("clr")
+    ops.append(f"{air},0,0,{zup:g},{travel_speed:g}")
+    ops.append("brk")
+    ops.append("run")
+    ops.append("end")
+    return ops, info
+
+def build_commands(d, base=None, accuracy=3.0, **kw):
+    """完整指令串:設定 + 動作序列"""
+    head = []
+    if base:
+        b = [float(x) for x in base.split(",")] if isinstance(base, str) else list(base)
+        if len(b) == 3:
+            b += [0.0, 180.0, 0.0]            # 工具朝下
+        head.append("base," + ",".join(f"{x:g}" for x in b))
+    head.append(f"acc,{accuracy:g}")
+    ops, info = build_ops(d, **kw)
+    return head + ops, info
+
+def pack(ops, maxlen=MAXLEN):
+    """多個動作用換行塞進同一個封包,塞滿 250 字元為止"""
+    out, cur = [], ""
+    for o in ops:
+        add = o if not cur else "\n" + o
+        if len(cur) + len(add) > maxlen:
+            out.append(cur); cur = o
+        else:
+            cur += add
+    if cur:
+        out.append(cur)
+    return out
 
 class Link:
     """一問一答:送一行、等一行。
@@ -138,6 +186,10 @@ def main():
     ap.add_argument("--travel-speed", type=float, default=300.0)
     ap.add_argument("--accuracy", type=float, default=3.0, help="精度 mm,放大才連續")
     ap.add_argument("--base", default=None, help="畫布原點 x,y,z 或 x,y,z,o,a,t")
+    ap.add_argument("--zup", type=float, default=15.0, help="抬筆高度 mm")
+    ap.add_argument("--signal", type=int, default=1, help="糖閥 DO 編號")
+    ap.add_argument("--dwell", type=float, default=0.15, help="下筆後等糖絲成形 s")
+    ap.add_argument("--cut", type=float, default=0.10, help="關閥後等糖絲斷 s")
     ap.add_argument("--dot-ms", type=float, default=120.0, help="糖點停留 ms/mm 直徑")
     ap.add_argument("--speed-quant", type=float, default=20.0,
                     help="速度量化級距 mm/s。必須跟 svg2points.py 用同一個值,"
@@ -162,25 +214,28 @@ def main():
     vmax = v.max_speed or v.draw_speed * 4
     quant = v.speed_quant
 
-    cmds, info = build_commands(d, v.base, v.draw_speed, v.max_speed,
-                                v.travel_speed, v.accuracy, v.speed_quant,
-                                v.air_move, v.dot_ms)
+    cmds, info = build_commands(
+        d, v.base, v.accuracy, zup=v.zup, sig=v.signal,
+        draw_speed=v.draw_speed, max_speed=v.max_speed,
+        travel_speed=v.travel_speed, speed_quant=v.speed_quant,
+        air_move=v.air_move, dwell=v.dwell, cut=v.cut, dot_ms=v.dot_ms)
+    pkts = pack(cmds)
+
     link = Link(v.host, v.port, v.dry_run)
     t0 = time.time()
-    si = 0
-    for c in cmds:
-        if c.startswith("BEG"):
-            n, lo, hi = info[si]; si += 1
-            print(f"筆劃 {si}/{len(strokes)}:{n} 點  速度 {lo:g}~{hi:g} mm/s")
-        link.send(c)
+    for pk in pkts:
+        link.send(pk)
     link.close()
 
-    n_cmd = sum(n for n, _, _ in info)
-    print(f"\n動作:LMOVE {n_cmd} 個")
-    print(f"空中移動:{'JAPPRO (關節插補)' if v.air_move == 'jmove' else 'LAPPRO (直線插補)'}"
-          f",抬筆退刀 LDEPART")
-    print(f"{len(strokes)} 筆劃 + {len(dots)} 糖點 -> {link.n} 個封包"
-          f"{'' if v.dry_run else f'，耗時 {time.time()-t0:.1f}s'}")
+    kinds = {}
+    for c in cmds:
+        kinds[c.split(",")[0]] = kinds.get(c.split(",")[0], 0) + 1
+    print("動作序列:" + "  ".join(f"{k} {n}" for k, n in
+                                   sorted(kinds.items(), key=lambda x: -x[1])))
+    for si, (n, lo, hi) in enumerate(info):
+        print(f"  筆劃 {si+1}/{len(strokes)}:{n} 點  速度 {lo:g}~{hi:g} mm/s")
+    print(f"共 {len(cmds)} 個動作 -> {link.n} 個封包"
+          f"{'' if v.dry_run else f'，載入耗時 {time.time()-t0:.1f}s'}")
 
 if __name__ == "__main__":
     main()
