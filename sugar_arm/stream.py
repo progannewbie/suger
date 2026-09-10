@@ -42,6 +42,36 @@ def pt_packets(stroke, speeds):
         out.append(cur)
     return out
 
+def build_commands(d, base=None, draw_speed=60.0, max_speed=0, travel_speed=300.0,
+                   accuracy=3.0, speed_quant=20.0, air_move="lmove", dot_ms=120.0):
+    """把 points.json 變成一串協定指令。不碰網路 —— sim.py 離線模擬也用這支。"""
+    strokes = d["strokes"]
+    widths = d.get("widths")
+    dots = d.get("dots", [])
+    vmax = max_speed or draw_speed * 4
+    out, info = [], []
+
+    if base:
+        b = [float(x) for x in base.split(",")] if isinstance(base, str) else list(base)
+        if len(b) == 3:
+            b += [0.0, 180.0, 0.0]            # 工具朝下
+        out.append("BASE," + ",".join(f"{x:g}" for x in b))
+    out.append(f"SPD,{draw_speed:g},{travel_speed:g},{accuracy:g}")
+    out.append(f"AIR,{1 if air_move == 'jmove' else 0}")
+
+    for i, st in enumerate(strokes):
+        w = widths[i] if widths else [1.0] * len(st)
+        sp = [w2speed(x, draw_speed, vmax, speed_quant) for x in w]
+        info.append((len(st), min(sp), max(sp)))
+        out.append(f"BEG,{len(st)}")
+        out += pt_packets(st, sp)
+        out.append("RUN")
+    for (x, y, dia) in dots:
+        out.append(f"DOT,{x:.2f},{y:.2f},{dot_ms*dia/1000:.3f}")
+    out.append("HOME")
+    out.append("END")
+    return out, info
+
 class Link:
     """一問一答:送一行、等一行。
 
@@ -132,35 +162,20 @@ def main():
     vmax = v.max_speed or v.draw_speed * 4
     quant = v.speed_quant
 
+    cmds, info = build_commands(d, v.base, v.draw_speed, v.max_speed,
+                                v.travel_speed, v.accuracy, v.speed_quant,
+                                v.air_move, v.dot_ms)
     link = Link(v.host, v.port, v.dry_run)
     t0 = time.time()
-
-    if v.base:
-        b = [float(x) for x in v.base.split(",")]
-        if len(b) == 3:
-            b += [0.0, 180.0, 0.0]            # 工具朝下
-        link.send("BASE," + ",".join(f"{x:g}" for x in b))
-    link.send(f"SPD,{v.draw_speed:g},{v.travel_speed:g},{v.accuracy:g}")
-    link.send(f"AIR,{1 if v.air_move == 'jmove' else 0}")
-    n_cmd = 0
-
-    for i, s in enumerate(strokes):
-        w = widths[i] if widths else [1.0] * len(s)
-        sp = [w2speed(x, v.draw_speed, vmax, quant) for x in w]
-        n_cmd += len(s)
-        print(f"筆劃 {i+1}/{len(strokes)}:{len(s)} 點  "
-              f"速度 {min(sp):g}~{max(sp):g} mm/s")
-        link.send(f"BEG,{len(s)}")
-        for p in pt_packets(s, sp):
-            link.send(p)
-        link.send("RUN")
-
-    for (x, y, dia) in dots:
-        link.send(f"DOT,{x:.2f},{y:.2f},{v.dot_ms*dia/1000:.3f}")
-
-    link.send("HOME")
-    link.send("END")
+    si = 0
+    for c in cmds:
+        if c.startswith("BEG"):
+            n, lo, hi = info[si]; si += 1
+            print(f"筆劃 {si}/{len(strokes)}:{n} 點  速度 {lo:g}~{hi:g} mm/s")
+        link.send(c)
     link.close()
+
+    n_cmd = sum(n for n, _, _ in info)
     print(f"\n動作:LMOVE {n_cmd} 個")
     print(f"空中移動:{'JAPPRO (關節插補)' if v.air_move == 'jmove' else 'LAPPRO (直線插補)'}"
           f",抬筆退刀 LDEPART")
