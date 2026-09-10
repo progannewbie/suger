@@ -8,7 +8,7 @@
   │
   ├─ Skill 1  sugar-stroke   → 一筆到底的毛筆 SVG(中心線 + 每點粗細)
   ├─ Skill 2  sugar-points   → 手臂平面座標(曲率自適應,點數砍 60%)
-  └─ Skill 3  stream.py      → 動作型態 + 速度 + 通訊字串
+  └─ Skill 3  sugar-motion   → 動作型態 + 速度 + 停留時間 + TCP 串流
                              ↓ TCP
                    arm/sugar_server.as(手臂端常駐程式)
 ```
@@ -118,11 +118,13 @@ TCP_END_LISTEN ret, port
 
 ```
 BEG,<點數>              宣告一筆劃
-PT,x,y,v,x,y,v,...      填點,每點帶速度。單封包 ≤250 字元
+PT,x,y,v,x,y,v,...      直線點,每點帶速度。單封包 ≤250 字元
+AR,mx,my,ex,ey,v,...    圓弧:弧上中點 + 終點
 RUN                     一次連續走完緩衝區
 DOT,x,y,秒              糖點
 BASE,x,y,z,o,a,t        畫布原點
 SPD,畫線,空走,精度
+AIR,0|1                 空中移動 0=LMOVE 1=JMOVE
 HOME / END
 ```
 
@@ -142,6 +144,19 @@ framing 靠「送一行就等回覆」。
 | `sugar_arm/path2as.py` | 舊路線:直接產 .as 檔上傳 |
 | `sugar_arm/svg2path.py` | 備援:手繪 SVG → 座標 |
 | `.claude/skills/` | Claude Code skill 定義(判斷規則) |
+
+## 動作型態
+
+| 情況 | 指令 |
+|---|---|
+| 筆劃內(預設) | `LMOVE` |
+| 筆劃內的等速圓弧段(`--arc`) | `C1MOVE` + `C2MOVE` |
+| 下筆/抬筆的垂直段 | `LMOVE`(必須) |
+| 空中移動(`--air-move jmove`) | `JMOVE` |
+
+圓弧預設關閉。**圓弧段內速度不能變,而毛筆粗細正是靠速度做的** ——
+毛筆開得越細膩,能用圓弧的地方越少。四個字實測:開圓弧指令數 −16%,
+但封包數 +125%。兩者都不是瓶頸,所以不預設開。
 
 ## 已知限制
 

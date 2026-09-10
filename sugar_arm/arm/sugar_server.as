@@ -39,6 +39,7 @@
   vtrav = 300                  ; 空走速度 mm/s
   acc   = 3                    ; 精度 mm。放大讓轉角連續走,不要設 0
   tmo   = 30                   ; 通訊逾時 秒。手冊上限 60
+  airj  = 0                    ; 空中移動:0=LMOVE(安全) 1=JMOVE(快但路徑不可預測)
   base  = TRANS(450,0,-120,0,180,0)   ; 畫布原點,三點校正後覆蓋
 
   SIGNAL -sig                  ; 確認糖閥關閉
@@ -78,8 +79,17 @@
         npt = 0
         CALL sub_ok
 
-      VALUE "PT":                        ; PT,x,y,v,x,y,v,...
+      VALUE "PT":                        ; PT,x,y,v,x,y,v,...  直線點
         CALL sub_points
+        CALL sub_ok
+
+      VALUE "AR":                        ; AR,中點x,中點y,終點x,終點y,v  圓弧
+        CALL sub_arc
+        CALL sub_ok
+
+      VALUE "AIR":                       ; AIR,0|1  空中移動的插補方式
+        CALL sub_next
+        airj = VAL(fld$)
         CALL sub_ok
 
       VALUE "RUN":                       ; RUN  一次連續走完緩衝區
@@ -187,7 +197,49 @@
   px[npt] = vx
   py[npt] = vy
   pv[npt] = VAL(fld$)
+  pk[npt] = 0                            ; 0 = LMOVE
   GOTO 200
+.END
+
+
+; =====================================================================
+; AR,中點x,中點y,終點x,終點y,v   一段圓弧
+;
+;   Kawasaki 的圓弧要兩道指令:C1MOVE 走到弧上中點,C2MOVE 走到終點。
+;   圓由「前一個動作的位置 + C1MOVE 的點 + C2MOVE 的點」三點決定。
+;   出處:F控AS語言參考手冊 90209-1025DE p.6-14
+; =====================================================================
+.PROGRAM sub_arc()
+300 IF npt >= maxpt - 2 THEN
+    RETURN
+  END
+  CALL sub_next
+  IF LEN(fld$) == 0 THEN                 ; 這包收完了
+    RETURN
+  END
+  mx = VAL(fld$)
+  CALL sub_next
+  my = VAL(fld$)
+  CALL sub_next
+  ex = VAL(fld$)
+  CALL sub_next
+  ey = VAL(fld$)
+  CALL sub_next
+  IF LEN(fld$) == 0 THEN                 ; 欄位不成五個,丟棄
+    RETURN
+  END
+  av = VAL(fld$)
+  npt = npt + 1
+  px[npt] = mx
+  py[npt] = my
+  pv[npt] = av
+  pk[npt] = 1                            ; 1 = C1MOVE 弧上中點
+  npt = npt + 1
+  px[npt] = ex
+  py[npt] = ey
+  pv[npt] = av
+  pk[npt] = 2                            ; 2 = C2MOVE 弧的終點
+  GOTO 300
 .END
 
 
@@ -204,8 +256,12 @@
   END
 
   SPEED vtrav MM/S ALWAYS
-  LMOVE SHIFT(base BY px[1], py[1], zup)
-  LMOVE SHIFT(base BY px[1], py[1], 0)
+  IF airj == 1 THEN
+    JMOVE SHIFT(base BY px[1], py[1], zup)   ; 關節插補較快
+  ELSE
+    LMOVE SHIFT(base BY px[1], py[1], zup)   ; 直線插補,路徑可預測
+  END
+  LMOVE SHIFT(base BY px[1], py[1], 0)       ; 下筆一定要垂直,不能用 JMOVE
   BREAK                                  ; 確認真的到位才開閥
 
   SIGNAL sig                             ; 開糖閥
@@ -217,7 +273,14 @@
       SPEED pv[i] MM/S ALWAYS            ; 只有變速才下指令
       lastv = pv[i]
     END
-    LMOVE SHIFT(base BY px[i], py[i], 0)
+    CASE pk[i] OF
+      VALUE 1:
+        C1MOVE SHIFT(base BY px[i], py[i], 0)
+      VALUE 2:
+        C2MOVE SHIFT(base BY px[i], py[i], 0)
+      ANY:
+        LMOVE SHIFT(base BY px[i], py[i], 0)
+    END
   END
 
   BREAK
