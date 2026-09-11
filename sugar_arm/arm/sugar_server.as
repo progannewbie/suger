@@ -18,10 +18,22 @@
 ;   end                finish
 ; Replies "OK" per packet, "ER" if a command is not recognised.
 ;
-; ALL COMMENTS MUST STAY ASCII.
-;   Chinese comments got mangled on the way through the editor and ate
-;   the line break, swallowing the next statement into the comment.
-;   That silently killed TCP_ACCEPT and the $DECODE separator consume.
+; ---------------------------------------------------------------------
+; THREE THINGS THAT COST A LOAD EACH.  Do not undo them.
+;
+; 1. String variables put the dollar sign at the FRONT of the name:
+;    $pkt, $fld, $cmd.  Trailing-dollar BASIC style is rejected on every
+;    single line (P0109 invalid statement, P0116 illegal function
+;    variable, P0160 specify ON or OFF).  Manual 3.7 p.3-19:
+;      $string variable = character string value
+;
+; 2. ALL COMMENTS MUST STAY ASCII.  Chinese comments got mangled by the
+;    editor and ate the line break, swallowing the next statement into
+;    the comment.  That silently killed TCP_ACCEPT and one $DECODE.
+;
+; 3. CASE index must be numeric, not a string (p.6-69), so the command
+;    word is dispatched with an IF chain, not CASE.
+; ---------------------------------------------------------------------
 ;
 ; Verified against the manuals:
 ;   TCP_LISTEN     ret, port                      90210-1344DE p.1-33
@@ -31,31 +43,28 @@
 ;   TCP_CLOSE      ret, sock                      p.1-42
 ;   TCP_END_LISTEN ret, port                      p.1-43
 ;   LDEPART        distance                       90209-1025DE p.6-6
+;   LEN            (string)                       p.9-11
+;   $DECODE        (string var, separator, mode)  p.9-71
+;     mode <= 0  take the text before the separator and remove it
+;     mode >  0  take the separator itself and remove it
+;     Both calls are needed to consume one field.
 ; Limits: port 8192-65535, timeout 1-60 s, 255 char per element (E4007),
 ;         4096 byte per call, needs the Ethernet option board (E4054).
-;
-; Two syntax traps already hit:
-;   - CASE index must be numeric, not a string (p.6-69), so the command
-;     word is dispatched with an IF chain.
-;   - $DECODE CONSUMES the source string, it does not index fields:
-;       $DECODE(s$, ",", 0)  take text before the separator, remove it
-;       $DECODE(s$, ",", 1)  take the separator itself, remove it
-;     Both calls are needed per field.  (90210-1342DE p.56)
 ; =====================================================================
 
   port = 10000               ; listen port, must be 8192-65535
   tmo  = 30                  ; comms timeout seconds, manual max 60
-  eol$ = $CHR(10)            ; line separator inside a packet
+  $eol = $CHR(10)            ; line separator inside a packet
 
   POINT nullpose = TRANS(0,0,0,0,0,0)
   BASE nullpose              ; work in world coordinates
-  POINT to1[1] = TRANS(0,0,0,0,0,0)
-  TOOL to1[1]                ; set the real nozzle TCP here
+  TOOL to1[1]                ; nozzle TCP, taught elsewhere
 
-; org is the canvas origin.  Teach it, or let the PC set it with the
-; "base" command.  Nothing moves until a command arrives - the arm must
-; not jump anywhere just because the program was started.
-  POINT org = TRANS(450,0,-120,0,180,0)
+; org is the canvas origin and is OWNED BY org_teach.  Do not assign it
+; here - that would wipe the taught value every time this starts.
+; The PC can still override it at run time with the "base" command.
+; Nothing moves until a command arrives; the arm must not jump anywhere
+; just because the program was started.
 
   SPEED 100 MM/S ALWAYS
   ACCURACY 3 ALWAYS
@@ -84,16 +93,16 @@
 ; ---------- main loop: receive, then run each line at once ----------
 100 WHILE quit == 0 DO
     CALL sub_recv
-    IF LEN(pkt$) == 0 THEN
+    IF LEN($pkt) == 0 THEN
       GOTO 100
     END
 ; one packet may hold several lines, peel them off one at a time
-110 line$ = $DECODE(pkt$, eol$, 0)
-    dmy$ = $DECODE(pkt$, eol$, 1)
-    IF LEN(line$) > 0 THEN
+110 $line = $DECODE($pkt, $eol, 0)
+    $dmy = $DECODE($pkt, $eol, 1)
+    IF LEN($line) > 0 THEN
       CALL sub_do
     END
-    IF LEN(pkt$) > 0 THEN
+    IF LEN($pkt) > 0 THEN
       GOTO 110
     END
     CALL sub_ok
@@ -113,78 +122,78 @@
 ; each stop leaves a blob of sugar.  The PC sends "brk" where it wants
 ; a real stop.  ACCURACY does the corner blending.
   CALL sub_next
-  cmd$ = fld$
+  $cmd = $fld
 
-  IF cmd$ == "lmove" THEN
+  IF $cmd == "lmove" THEN
     CALL sub_xyzv
     POINT st = SHIFT(org BY vx, vy, vz)
     LMOVE st
     RETURN
   END
 
-  IF cmd$ == "jmove" THEN
+  IF $cmd == "jmove" THEN
     CALL sub_xyzv
     POINT st = SHIFT(org BY vx, vy, vz)
     JMOVE st
     RETURN
   END
 
-  IF cmd$ == "ldepart" THEN
+  IF $cmd == "ldepart" THEN
     CALL sub_next
-    vz = VAL(fld$)
+    vz = VAL($fld)
     CALL sub_next
     CALL sub_speed
     LDEPART vz
     RETURN
   END
 
-  IF cmd$ == "sig" THEN
+  IF $cmd == "sig" THEN
     CALL sub_next
-    signum = VAL(fld$)
+    signum = VAL($fld)
     SIGNAL signum
     RETURN
   END
 
-  IF cmd$ == "wait" THEN
+  IF $cmd == "wait" THEN
     CALL sub_next
-    waitt = VAL(fld$)
+    waitt = VAL($fld)
     TWAIT waitt
     RETURN
   END
 
-  IF cmd$ == "brk" THEN
+  IF $cmd == "brk" THEN
     BREAK
     RETURN
   END
 
 ; base,x,y,z,o,a,t  sets the canvas origin pose.
-; Note the variable names: ox oy oz oo oa ot.  Do NOT reuse "ba" here,
-; that name is a pose elsewhere and assigning a real to it breaks it.
-  IF cmd$ == "base" THEN
+; Names are ox oy oz oo oa ot on purpose - do not reuse "ba", that is a
+; pose variable elsewhere and assigning a real to it breaks it.
+  IF $cmd == "base" THEN
     CALL sub_next
-    ox = VAL(fld$)
+    ox = VAL($fld)
     CALL sub_next
-    oy = VAL(fld$)
+    oy = VAL($fld)
     CALL sub_next
-    oz = VAL(fld$)
+    oz = VAL($fld)
     CALL sub_next
-    oo = VAL(fld$)
+    oo = VAL($fld)
     CALL sub_next
-    oa = VAL(fld$)
+    oa = VAL($fld)
     CALL sub_next
-    ot = VAL(fld$)
+    ot = VAL($fld)
     POINT org = TRANS(ox, oy, oz, oo, oa, ot)
     RETURN
   END
 
-  IF cmd$ == "acc" THEN
+  IF $cmd == "acc" THEN
     CALL sub_next
-    accv = VAL(fld$)
+    accv = VAL($fld)
     ACCURACY accv ALWAYS
     RETURN
   END
 
-  IF cmd$ == "end" THEN
+  IF $cmd == "end" THEN
     quit = 1
     RETURN
   END
@@ -195,19 +204,19 @@
 .PROGRAM sub_xyzv()
 ; read x,y,z,v and set the speed only when it changed
   CALL sub_next
-  vx = VAL(fld$)
+  vx = VAL($fld)
   CALL sub_next
-  vy = VAL(fld$)
+  vy = VAL($fld)
   CALL sub_next
-  vz = VAL(fld$)
+  vz = VAL($fld)
   CALL sub_next
   CALL sub_speed
 .END
 
 .PROGRAM sub_speed()
-; fld$ holds the speed.  Emitting SPEED on every point would flood the
+; $fld holds the speed.  Emitting SPEED on every point would flood the
 ; controller, so only do it when the value actually changes.
-  spdv = VAL(fld$)
+  spdv = VAL($fld)
   IF spdv <> lastv THEN
     SPEED spdv MM/S ALWAYS
     lastv = spdv
@@ -215,40 +224,40 @@
 .END
 
 .PROGRAM sub_next()
-; take one comma separated field from line$ into fld$
+; take one comma separated field from $line into $fld
 ; both $DECODE calls are required, see the header note
-  fld$ = $DECODE(line$, ",", 0)
-  sep$ = $DECODE(line$, ",", 1)
+  $fld = $DECODE($line, ",", 0)
+  $sep = $DECODE($line, ",", 1)
 .END
 
 .PROGRAM sub_recv()
 ; no trailing newline on the wire, framing is send-one-wait-one
-  pkt$ = ""
+  $pkt = ""
   ret = 999
   rcnt = 0
   TCP_RECV ret, sock, $rbuf[0], rcnt, tmo, 255
   WAIT (ret<>999)
   IF ret == 0 THEN
     IF rcnt >= 1 THEN
-      pkt$ = $rbuf[0]
+      $pkt = $rbuf[0]
     END
   END
 .END
 
 .PROGRAM sub_send()
-  $sbuf[0] = tx$
+  $sbuf[0] = $tx
   ret = 999
   TCP_SEND ret, sock, $sbuf[0], 1, tmo
   WAIT (ret<>999)
 .END
 
 .PROGRAM sub_ok()
-  tx$ = "OK"
+  $tx = "OK"
   CALL sub_send
 .END
 
 .PROGRAM sub_err()
-  tx$ = "ER"
+  $tx = "ER"
   CALL sub_send
 .END
 
