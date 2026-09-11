@@ -89,8 +89,30 @@ $PY sugar_arm/stream.py points.json --host 127.0.0.1 --port 10123   # 另一個
 
 ## 手臂端
 
-`sugar_arm/arm/sugar_server.as` 載進控制器常駐執行,開 TCP 監聽,
-收字串 → 解析 → 填緩衝陣列 → 一次連續走完。
+三支 AS 程式,載進控制器:
+
+| 程式 | 用途 | 需要 PC? |
+|---|---|---|
+| `sugar_server.as` | 常駐接收器。收字串 → 填緩衝 → `run` 時連續走完 | 要 |
+| `sugar_calib.as` | 畫布三點校正,用 `FRAME()` 算出座標系 | 不用 |
+| `sugar_test.as` | 自測:方形、短線段計時、糖閥時機 | 不用 |
+
+**建議順序:先跑 `sugar_test`(乾跑)確認手臂會動,再跑 `sugar_calib` 校正畫布,
+最後才啟動 `sugar_server` 接 PC。**
+
+### 已知限制:用不到 Motion Type 2
+
+手冊 4.5.4.2:`IF` / `END` 這類分支介於兩個移動指令之間時,動作會退回
+Standard motion type。Motion Type 2 在「精度放大且姿態不變」時,即使兩點
+很近也能達到設定速度;Standard 則不保證。
+
+本程式是 FOR + 分派迴圈,每個移動之間都有分支,所以一定是 Standard。
+手冊自己的「沿指定路徑運動」範例(4.5.5)也是 FOR/LMOVE 迴圈,同樣是
+Standard —— 用迴圈餵點就避不開。
+
+對策:`acc` 放大到 3~5mm,而且點間距不要太小。`sugar_test.as` 的第 2 段
+測試就是量這個:同樣 120mm 的直線,一次走完 vs 切成 40 個 3mm 小段,
+比較耗時。差很多就要把 PC 端的 `--min-seg` 調大。
 
 TCP 指令簽名查證自 **F控通訊選項手冊 90210-1344DE** 1.6 節:
 
@@ -160,7 +182,9 @@ $PY sugar_arm/sim.py points.json --base 450,0,-120 --trace trace.as --plot sim.p
 | `sugar_arm/svg2points.py` | SVG → 手臂座標(Skill 2) |
 | `sugar_arm/stream.py` | 座標 → 通訊字串(Skill 3) |
 | `sugar_arm/sim.py` | 離線模擬手臂會執行哪些動作 |
-| `sugar_arm/arm/sugar_server.as` | 手臂端常駐接收程式 |
+| `sugar_arm/arm/sugar_server.as` | 手臂端常駐接收程式(固定,不用改) |
+| `sugar_arm/arm/sugar_calib.as` | 畫布三點校正,不需要 PC |
+| `sugar_arm/arm/sugar_test.as` | 手臂自測,不需要 PC 也不需要治具 |
 | `sugar_arm/path2as.py` | 舊路線:直接產 .as 檔上傳 |
 | `sugar_arm/svg2path.py` | 備援:手繪 SVG → 座標 |
 | `.claude/skills/` | Claude Code skill 定義(判斷規則) |

@@ -30,6 +30,16 @@
 ;
 ; 為什麼要緩衝:一問一答式的即時執行會變成 stop-and-go,
 ; 每個往返停頓都是一坨糖。所以先收滿一整筆劃,收到 run 才連續走完。
+;
+; 已知限制 —— Motion Type 2 用不到:
+;   手冊 4.5.4.2 說,IF / END 這類分支介於兩個移動指令之間時,動作會退回
+;   Standard motion type。Motion Type 2 在「精度放大且姿態不變」時,即使
+;   兩點很近也能達到設定速度;Standard 則不保證。
+;   本程式是 FOR + 分派迴圈,每個移動之間都有分支,所以一定是 Standard。
+;   手冊自己的「沿指定路徑運動」範例(4.5.5)也是 FOR/LMOVE 迴圈,同樣是
+;   Standard —— 用迴圈餵點就避不開。
+;   對策:ACCURACY 放大(3~5mm),而且點間距不要太小(PC 端 --min-seg),
+;   太短的線段在 Standard 型態下達不到設定速度,線寬會不均。
 ; ---------------------------------------------------------------------
 ;
 ; 指令簽名查證自你的手冊:
@@ -68,7 +78,7 @@
   TCP_LISTEN ret, port
   WAIT (ret<>999)
   IF ret <> 0 THEN
-    TYPE "TCP_LISTEN failed, ret = ", ret
+    PRINT "TCP_LISTEN failed, ret = ", ret
     GOTO 900
   END
 
@@ -76,10 +86,10 @@
   TCP_ACCEPT sock, port, 60, ipa[0]
   WAIT (sock<>999)
   IF sock < 0 THEN
-    TYPE "waiting for host..."
+    PRINT "waiting for host..."
     GOTO 50
   END
-  TYPE "connected from ", ipa[0], ".", ipa[1], ".", ipa[2], ".", ipa[3]
+  PRINT "connected from ", ipa[0], ipa[1], ipa[2], ipa[3]
 
 ; ---------- 主迴圈 ----------
 100 WHILE quit == 0 DO
@@ -111,82 +121,93 @@
 ; sub_exec  解析一行並處理
 ; =====================================================================
 .PROGRAM sub_exec()
+; 注意:AS 的 CASE 索引必須是「數值」(手冊 p.6-69:Real value variable or
+; expression),不能用字串。所以指令字的分派只能用 IF 鏈,不能用 CASE。
   CALL sub_next
   cmd$ = fld$
 
-  CASE cmd$ OF
-    VALUE "lmove":                     ; lmove,x,y,z,v
-      CALL sub_push
-      op[nop] = 1
-
-    VALUE "jmove":                     ; jmove,x,y,z,v
-      CALL sub_push
-      op[nop] = 2
-
-    VALUE "ldepart":                   ; ldepart,d,v
-      IF nop < maxop THEN
-        nop = nop + 1
-        CALL sub_next
-        pz[nop] = VAL(fld$)            ; 退開距離
-        CALL sub_next
-        pv[nop] = VAL(fld$)
-        op[nop] = 3
-      END
-
-    VALUE "sig":                       ; sig,n   正開負關
-      IF nop < maxop THEN
-        nop = nop + 1
-        CALL sub_next
-        pv[nop] = VAL(fld$)
-        op[nop] = 4
-      END
-
-    VALUE "wait":                      ; wait,t
-      IF nop < maxop THEN
-        nop = nop + 1
-        CALL sub_next
-        pv[nop] = VAL(fld$)
-        op[nop] = 5
-      END
-
-    VALUE "brk":                       ; brk
-      IF nop < maxop THEN
-        nop = nop + 1
-        op[nop] = 6
-      END
-
-    VALUE "base":                      ; base,x,y,z,o,a,t  立即生效
-      CALL sub_next
-      bx = VAL(fld$)
-      CALL sub_next
-      by = VAL(fld$)
-      CALL sub_next
-      bz = VAL(fld$)
-      CALL sub_next
-      bo = VAL(fld$)
-      CALL sub_next
-      ba = VAL(fld$)
-      CALL sub_next
-      bt = VAL(fld$)
-      base = TRANS(bx, by, bz, bo, ba, bt)
-
-    VALUE "acc":                       ; acc,n  立即生效
-      CALL sub_next
-      ACCURACY VAL(fld$) ALWAYS
-
-    VALUE "run":                       ; run  執行緩衝
-      CALL sub_run
-      nop = 0
-
-    VALUE "clr":
-      nop = 0
-
-    VALUE "end":
-      quit = 1
-
-    ANY:
-      CALL sub_err
+  IF cmd$ == "lmove" THEN               ; lmove,x,y,z,v
+    CALL sub_push
+    op[nop] = 1
+    RETURN
   END
+  IF cmd$ == "jmove" THEN               ; jmove,x,y,z,v
+    CALL sub_push
+    op[nop] = 2
+    RETURN
+  END
+  IF cmd$ == "ldepart" THEN             ; ldepart,d,v
+    IF nop < maxop THEN
+      nop = nop + 1
+      CALL sub_next
+      pz[nop] = VAL(fld$)               ; 退開距離
+      CALL sub_next
+      pv[nop] = VAL(fld$)
+      op[nop] = 3
+    END
+    RETURN
+  END
+  IF cmd$ == "sig" THEN                 ; sig,n   正開負關
+    IF nop < maxop THEN
+      nop = nop + 1
+      CALL sub_next
+      pv[nop] = VAL(fld$)
+      op[nop] = 4
+    END
+    RETURN
+  END
+  IF cmd$ == "wait" THEN                ; wait,t
+    IF nop < maxop THEN
+      nop = nop + 1
+      CALL sub_next
+      pv[nop] = VAL(fld$)
+      op[nop] = 5
+    END
+    RETURN
+  END
+  IF cmd$ == "brk" THEN                 ; brk
+    IF nop < maxop THEN
+      nop = nop + 1
+      op[nop] = 6
+    END
+    RETURN
+  END
+  IF cmd$ == "base" THEN                ; base,x,y,z,o,a,t  立即生效
+    CALL sub_next
+    bx = VAL(fld$)
+    CALL sub_next
+    by = VAL(fld$)
+    CALL sub_next
+    bz = VAL(fld$)
+    CALL sub_next
+    bo = VAL(fld$)
+    CALL sub_next
+    ba = VAL(fld$)
+    CALL sub_next
+    bt = VAL(fld$)
+    base = TRANS(bx, by, bz, bo, ba, bt)
+    RETURN
+  END
+  IF cmd$ == "acc" THEN                 ; acc,n  立即生效
+    CALL sub_next
+    accv = VAL(fld$)
+    ACCURACY accv ALWAYS
+    RETURN
+  END
+  IF cmd$ == "run" THEN                 ; run  執行緩衝
+    CALL sub_run
+    nop = 0
+    RETURN
+  END
+  IF cmd$ == "clr" THEN
+    nop = 0
+    RETURN
+  END
+  IF cmd$ == "end" THEN
+    quit = 1
+    RETURN
+  END
+  CALL sub_err
 .END
 
 
