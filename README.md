@@ -6,11 +6,13 @@
 ```
 輸入(字 / 圖)
   │
-  ├─ Skill 1  sugar-stroke   → 一筆到底的毛筆 SVG(中心線 + 每點粗細)
-  ├─ Skill 2  sugar-points   → 手臂平面座標(曲率自適應,點數砍 60%)
-  └─ Skill 3  sugar-motion   → 動作型態 + 速度 + 停留時間 + TCP 串流
+  ├─ Skill 1  sugar-stroke   → out.svg      一筆到底的毛筆 SVG(中心線 + 每點粗細)
+  ├─ Skill 2  sugar-points   → points.json  手臂平面座標(曲率自適應,點數砍 60%)
+  └─ Skill 3  sugar-motion   → motion.json  動作計畫(移動方式 + 位置 + 速度)
+                             ↓
+           stream.py         把 motion.json 拆成一行一個動作的字串
                              ↓ TCP
-                   arm/sugar_server.as(手臂端常駐程式)
+     arm/sugar_server.as     收字串 → 照字串講的去動
 ```
 
 ## 核心概念
@@ -56,11 +58,14 @@ $PY sugar_arm/text2path.py 台灣尚勇 --size 45 --cols 2 --brush --link char \
 # Skill 2: SVG → 手臂座標
 $PY sugar_arm/svg2points.py out.svg -o points.json --report
 
-# Skill 3: 座標 → 通訊字串(先 dry-run 看封包)
-$PY sugar_arm/stream.py points.json --dry-run --base 450,0,-120 --draw-speed 60
+# Skill 3: 座標 → 動作計畫
+$PY sugar_arm/plan.py points.json -o motion.json --base 450,0,-120 --draw-speed 60
+
+# 傳輸程式:先 dry-run 看字串
+$PY sugar_arm/stream.py motion.json --dry-run
 
 # 實際送給手臂
-$PY sugar_arm/stream.py points.json --host 192.168.0.2 --base 450,0,-120
+$PY sugar_arm/stream.py motion.json --host 192.168.0.2
 ```
 
 `--link` 決定書體:
@@ -84,7 +89,7 @@ $PY sugar_arm/img2path.py 圖.jpg --width 110 --svg out.svg -o out.json --previe
 
 ```bash
 $PY sugar_arm/stream.py --fake-server --port 10123      # 一個終端機
-$PY sugar_arm/stream.py points.json --host 127.0.0.1 --port 10123   # 另一個
+$PY sugar_arm/stream.py motion.json --host 127.0.0.1 --port 10123   # 另一個
 ```
 
 ## 手臂端
@@ -185,7 +190,7 @@ end                收工
 上機前先看手臂會收到什麼,不接機台不開網路:
 
 ```bash
-$PY sugar_arm/sim.py points.json --base 450,0,-120 --trace trace.as --plot sim.png
+$PY sugar_arm/sim.py motion.json --trace trace.as --plot sim.png
 ```
 
 用跟 `sugar_server.as` 完全一樣的狀態機把協定展開成 AS 動作序列。
@@ -199,7 +204,8 @@ $PY sugar_arm/sim.py points.json --base 450,0,-120 --trace trace.as --plot sim.p
 | `sugar_arm/img2path.py` | 圖片 → 筆劃(Skill 1) |
 | `sugar_arm/svgout.py` | 共用 SVG 輸出格式 |
 | `sugar_arm/svg2points.py` | SVG → 手臂座標(Skill 2) |
-| `sugar_arm/stream.py` | 座標 → 通訊字串(Skill 3) |
+| `sugar_arm/plan.py` | 座標 → 動作計畫 motion.json(Skill 3) |
+| `sugar_arm/stream.py` | 把 motion.json 拆成字串傳給手臂 |
 | `sugar_arm/sim.py` | 離線模擬手臂會執行哪些動作 |
 | `sugar_arm/arm/sugar_server.as` | 手臂端常駐接收程式(固定,不用改) |
 | `sugar_arm/arm/sugar_calib.as` | 畫布三點校正,不需要 PC |

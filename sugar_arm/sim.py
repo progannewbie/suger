@@ -6,11 +6,11 @@
 把每一道 AS 動作指令展開寫成 trace.as,並估算時間、畫出軌跡圖。
 
 用法 —— 離線,不開網路不接任何東西:
-  python sim.py points.json --base 450,0,-120 --trace trace.as --plot sim.png
+  python sim.py motion.json --trace trace.as --plot sim.png
 
 用法 —— 當假手臂,順便驗證真實的 TCP 收發(兩個終端機):
   python sim.py --serve --port 10555 --trace trace.as
-  python stream.py points.json --host 127.0.0.1 --port 10555 --base 450,0,-120
+  python stream.py motion.json --host 127.0.0.1 --port 10555
 """
 import argparse, json, math, os, socket, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -142,17 +142,9 @@ def run_server(arm, port):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("json", nargs="?", help="Skill 2 的 points.json(離線模式)")
+    ap.add_argument("json", nargs="?", help="Skill 3 的 motion.json(離線模式)")
     ap.add_argument("--serve", action="store_true", help="改當假手臂,等 TCP 連線")
     ap.add_argument("--port", type=int, default=10555)
-    ap.add_argument("--base", default=None, help="畫布原點 x,y,z 或 x,y,z,o,a,t")
-    ap.add_argument("--draw-speed", type=float, default=60.0)
-    ap.add_argument("--max-speed", type=float, default=0)
-    ap.add_argument("--travel-speed", type=float, default=300.0)
-    ap.add_argument("--accuracy", type=float, default=3.0)
-    ap.add_argument("--speed-quant", type=float, default=20.0)
-    ap.add_argument("--air-move", choices=["lmove", "jmove"], default="lmove")
-    ap.add_argument("--dot-ms", type=float, default=120.0)
     ap.add_argument("--trace", default="trace.as", help="輸出 AS 動作序列")
     ap.add_argument("--plot", default=None, help="輸出軌跡圖 PNG")
     ap.add_argument("--zup", type=float, default=15.0)
@@ -161,11 +153,10 @@ def main():
     v = ap.parse_args()
 
     if not v.serve and not v.json:
-        sys.exit("要給 points.json,或加 --serve 當假手臂")
+        sys.exit("要給 motion.json,或加 --serve 當假手臂")
 
-    arm = Arm(v.zup, v.signal, v.draw_speed, v.travel_speed, v.accuracy)
+    arm = Arm(v.zup, v.signal, 60, 300, 3)
     arm.emit(".PROGRAM sugar_replay()")
-    arm.emit(f"  SIGNAL -{v.signal}")
 
     if v.serve:
         n = run_server(arm, v.port)
@@ -173,13 +164,9 @@ def main():
     else:
         import stream
         d = json.load(open(v.json))
-        cmds, _ = stream.build_commands(
-            d, v.base, v.accuracy, zup=v.zup, sig=v.signal,
-            draw_speed=v.draw_speed, max_speed=v.max_speed,
-            travel_speed=v.travel_speed, speed_quant=v.speed_quant,
-            air_move=v.air_move, dot_ms=v.dot_ms)
-        n = run_offline(arm, cmds)
-        src = f"{n} 個動作指令(離線,完全沒用到網路)"
+        lines = stream.to_lines(d)
+        n = run_offline(arm, lines)
+        src = f"{n} 個動作(離線,完全沒用到網路)"
 
     arm.emit(".END")
     open(v.trace, "w").write("\n".join(arm.trace) + "\n")
