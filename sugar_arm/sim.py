@@ -19,12 +19,11 @@ BREAK_SETTLE = 0.05          # BREAK 等待到位的沉降時間估計 s
 ACC_PENALTY  = 0.15          # 每次啟停的加減速額外時間估計 s
 
 class Arm:
-    """對應 sugar_server.as 的狀態機。收 -> 緩衝 -> run 才執行。"""
+    """對應 sugar_server.as:收一行就執行一行,沒有緩衝。"""
     def __init__(self, zup, sig, vdraw, vtrav, acc):
         self.zup, self.sig, self.acc = zup, sig, acc
         self.vtrav = vtrav
         self.base = (450.0, 0.0, -120.0, 0.0, 180.0, 0.0)
-        self.buf = []                       # 緩衝的動作
         self.trace, self.path, self.t = [], [], 0.0
         self.here = None
         self.pen = False
@@ -48,60 +47,45 @@ class Arm:
             self.emit(f"  SPEED {v:g} MM/S ALWAYS", 0.0, "SPEED")
             self.lastv = v
 
-    # ---- 協定,對應 AS 的 sub_exec ----
     def cmd(self, line):
         for one in line.split("\n"):
             one = one.strip()
-            if not one:
-                continue
-            if not self._one(one):
+            if one and not self._one(one):
                 return False
         return True
 
     def _one(self, line):
         f = line.split(",")
         c = f[0]
-        if c == "base":
+        if c in ("lmove", "jmove"):
+            x, y, z, v = (float(q) for q in f[1:5])
+            self._speed(v)
+            AS = "LMOVE" if c == "lmove" else "JMOVE"
+            dt = self._go(x, y, v) + (abs(z) / v if z else 0.0)
+            self.emit(f"  {AS} SHIFT(base BY {x:.2f},{y:.2f},{z:g})", dt, AS)
+        elif c == "ldepart":
+            dist, v = float(f[1]), float(f[2])
+            self._speed(v)
+            self.pen = False
+            self.emit(f"  LDEPART {dist:g}", dist / v, "LDEPART")
+        elif c == "sig":
+            n = int(float(f[1]))
+            self.pen = n > 0
+            self.emit(f"  SIGNAL {n}", 0.0, "SIGNAL")
+        elif c == "wait":
+            t = float(f[1])
+            self.emit(f"  TWAIT {t:g}", t, "TWAIT")
+        elif c == "brk":
+            self.emit("  BREAK", BREAK_SETTLE + ACC_PENALTY, "BREAK")
+        elif c == "base":
             self.base = tuple(float(x) for x in f[1:7])
             self.emit(f"  base = TRANS({','.join(f[1:7])})")
         elif c == "acc":
             self.acc = float(f[1])
             self.emit(f"  ACCURACY {self.acc:g} ALWAYS")
-        elif c == "clr":
-            self.buf = []
-        elif c in ("lmove", "jmove", "ldepart", "sig", "wait", "brk"):
-            self.buf.append(f)
-        elif c == "run":
-            self.run()
-            self.buf = []
         elif c == "end":
             return False
         return True
-
-    def run(self):
-        for f in self.buf:
-            c = f[0]
-            if c in ("lmove", "jmove"):
-                x, y, z, v = (float(q) for q in f[1:5])
-                self._speed(v)
-                AS = "LMOVE" if c == "lmove" else "JMOVE"
-                dt = self._go(x, y, v) if z == 0 or self.here is None else \
-                     self._go(x, y, v) + abs(z) / v
-                self.emit(f"  {AS} SHIFT(base BY {x:.2f},{y:.2f},{z:g})", dt, AS)
-            elif c == "ldepart":
-                dist, v = float(f[1]), float(f[2])
-                self._speed(v)
-                self.pen = False
-                self.emit(f"  LDEPART {dist:g}", dist / v, "LDEPART")
-            elif c == "sig":
-                n = int(float(f[1]))
-                self.pen = n > 0
-                self.emit(f"  SIGNAL {n}", 0.0, "SIGNAL")
-            elif c == "wait":
-                t = float(f[1])
-                self.emit(f"  TWAIT {t:g}", t, "TWAIT")
-            elif c == "brk":
-                self.emit("  BREAK", BREAK_SETTLE + ACC_PENALTY, "BREAK")
 
 def plot(path, out, bead):
     from PIL import Image, ImageDraw

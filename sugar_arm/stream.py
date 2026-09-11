@@ -48,7 +48,11 @@ def build_ops(d, zup=15.0, sig=1, draw_speed=60.0, max_speed=0,
     """把座標變成一串動作指令。每行一個動作,自帶型態。
 
     所有糖畫邏輯都在這裡 —— 什麼時候開閥、停多久、怎麼抬筆。
-    手臂端只是照順序執行,完全不知道自己在畫糖。
+    手臂端收到一行就執行一行,完全不知道自己在畫糖。
+
+    不用擔心「一行一往返會頓」:AS 執行移動指令時不會卡住程式,
+    控制器會把移動排進自己的佇列(手冊 4.5.5)。60mm/s、點距 1mm
+    只需要每秒 60 個點,區網往返 1~5ms 餵得過來。
     """
     strokes = d["strokes"]
     widths = d.get("widths")
@@ -62,7 +66,6 @@ def build_ops(d, zup=15.0, sig=1, draw_speed=60.0, max_speed=0,
         sp = [w2speed(x, draw_speed, vmax, speed_quant) for x in w]
         info.append((len(st), min(sp), max(sp)))
         x0, y0 = st[0]
-        ops.append("clr")
         ops.append(f"{air},{x0:.2f},{y0:.2f},{zup:g},{travel_speed:g}")  # 移到起點上方
         ops.append(f"lmove,{x0:.2f},{y0:.2f},0,{travel_speed:g}")        # 垂直下筆
         ops.append("brk")                       # 確認到位才開閥
@@ -74,10 +77,8 @@ def build_ops(d, zup=15.0, sig=1, draw_speed=60.0, max_speed=0,
         ops.append(f"sig,-{sig}")               # 關糖閥
         ops.append(f"wait,{cut:g}")             # 等糖絲斷
         ops.append(f"ldepart,{zup:g},{travel_speed:g}")   # 沿工具軸垂直抬筆
-        ops.append("run")
 
     for (x, y, dia) in dots:
-        ops.append("clr")
         ops.append(f"{air},{x:.2f},{y:.2f},{zup:g},{travel_speed:g}")
         ops.append(f"lmove,{x:.2f},{y:.2f},0,{travel_speed:g}")
         ops.append("brk")
@@ -86,12 +87,9 @@ def build_ops(d, zup=15.0, sig=1, draw_speed=60.0, max_speed=0,
         ops.append(f"sig,-{sig}")
         ops.append(f"wait,{cut:g}")
         ops.append(f"ldepart,{zup:g},{travel_speed:g}")
-        ops.append("run")
 
-    ops.append("clr")
-    ops.append(f"{air},0,0,{zup:g},{travel_speed:g}")
+    ops.append(f"{air},0,0,{zup:g},{travel_speed:g}")     # 回原點上方
     ops.append("brk")
-    ops.append("run")
     ops.append("end")
     return ops, info
 

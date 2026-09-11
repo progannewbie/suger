@@ -1,77 +1,76 @@
 ; =====================================================================
-; sugar_server.as -- 通用動作序列執行器 (Kawasaki F60 / AS Language)
+; sugar_server.as -- Ethernet 字串接收執行器 (Kawasaki F60 / AS Language)
 ;
-; 這支程式是「固定的」—— 載進控制器之後就不用再改。
-; 它完全不知道什麼是糖畫、什麼是筆劃、什麼是毛筆。
-; 它只做三件事:收字串、存進緩衝、照順序執行。
+; 這支程式做的事只有一件:
 ;
-; 所有決策(走哪裡、多快、什麼時候開糖閥、停多久)都在 PC 端算好,
-; 用字串送進來。要換成畫別的東西,改 PC 端就好,這支不用動。
+;       收 Ethernet 字串 -> 照字串講的去動
+;
+; 它不知道什麼是糖畫、什麼是筆劃、什麼是毛筆。
+; 走哪裡、多快、什麼時候開糖閥、停多久,全部由 PC 端算好用字串送進來。
+; 載進控制器之後就不用再改 —— 要換成畫別的東西,改 PC 端就好。
 ;
 ; ---------------------------------------------------------------------
-; 協定:一行一個動作,自帶型態。多個動作可以用換行塞在同一個封包裡。
+; 字串格式:一行一個動作,逗號分隔。一個封包可以用換行塞多行。
 ;
-;   緩衝型(存起來,收到 run 才一起執行):
-;     lmove,x,y,z,v      直線插補到 base 偏移 (x,y,z),速度 v mm/s
-;     jmove,x,y,z,v      關節插補,同上
-;     ldepart,d,v        沿「工具 Z 軸」退開 d mm(抬筆用,保證垂直)
-;     sig,n              n 正數=開,負數=關。糖閥就是這個
-;     wait,t             停留 t 秒
-;     brk                等動作完全到位
+;   lmove,x,y,z,v      直線插補到 base 偏移 (x,y,z),速度 v mm/s
+;   jmove,x,y,z,v      關節插補,同上
+;   ldepart,d,v        沿工具 Z 軸退開 d mm(抬筆用,保證垂直)
+;   sig,n              n 正數=開,負數=關。糖閥就是這個
+;   wait,t             停留 t 秒
+;   brk                等動作完全到位才繼續
+;   base,x,y,z,o,a,t   設定畫布原點
+;   acc,n              設定精度 mm
+;   end                收工
 ;
-;   立即型(不進緩衝,馬上做):
-;     base,x,y,z,o,a,t   設定畫布原點
-;     acc,n              設定精度 mm
-;     run                一次連續執行緩衝區,然後清空
-;     clr                清空緩衝
-;     end                收工
+; 每收一個封包回 "OK";指令不認得回 "ER"。
 ;
-; 每收一行回 "OK" 或 "ER"。
-;
-; 為什麼要緩衝:一問一答式的即時執行會變成 stop-and-go,
-; 每個往返停頓都是一坨糖。所以先收滿一整筆劃,收到 run 才連續走完。
-;
-; 已知限制 —— Motion Type 2 用不到:
-;   手冊 4.5.4.2 說,IF / END 這類分支介於兩個移動指令之間時,動作會退回
-;   Standard motion type。Motion Type 2 在「精度放大且姿態不變」時,即使
-;   兩點很近也能達到設定速度;Standard 則不保證。
-;   本程式是 FOR + 分派迴圈,每個移動之間都有分支,所以一定是 Standard。
-;   手冊自己的「沿指定路徑運動」範例(4.5.5)也是 FOR/LMOVE 迴圈,同樣是
-;   Standard —— 用迴圈餵點就避不開。
-;   對策:ACCURACY 放大(3~5mm),而且點間距不要太小(PC 端 --min-seg),
-;   太短的線段在 Standard 型態下達不到設定速度,線寬會不均。
 ; ---------------------------------------------------------------------
+; 為什麼可以「收到就動」而不會頓
 ;
-; 指令簽名查證自你的手冊:
-;   TCP_LISTEN     ret, port                    F控通訊選項手冊 90210-1344DE p.1-33
-;   TCP_ACCEPT     ret, port, timeout, ipa[0]   同上 p.1-34,ret=socket ID
-;   TCP_SEND       ret, sock, $sbuf[0], 元素數, timeout    同上 p.1-38
+; AS 在執行移動指令時不會卡住程式 —— 控制器會把移動指令排進自己的
+; 佇列,程式繼續往下跑(手冊 4.5.5:「AS can perform non-motion
+; instructions while the robot is moving」)。所以只要網路餵得夠快,
+; 手臂就會連續走完,不會一點一停。
+;
+; 以 60mm/s、點距 1mm 計,每秒只需要 60 個點;區域網路往返約 1~5ms,
+; 每秒可以送 200~1000 個點,餵得過來。
+;
+; 唯一風險:網路突然卡住時,控制器的佇列會清空,手臂停在半途 ->
+; 糖會積一坨。PC 端要避免在畫線途中做耗時的事。
+;
+; ---------------------------------------------------------------------
+; 指令簽名查證自手冊:
+;   TCP_LISTEN     ret, port                    通訊選項手冊 90210-1344DE p.1-33
+;   TCP_ACCEPT     ret, port, timeout, ipa[0]   同上 p.1-34,ret = socket ID
+;   TCP_SEND       ret, sock, $sbuf[0], 元素數, timeout        同上 p.1-38
 ;   TCP_RECV       ret, sock, $rbuf[0], 元素數變數, timeout, 字元上限  同上 p.1-40
 ;   TCP_CLOSE      ret, sock                    同上 p.1-42
 ;   TCP_END_LISTEN ret, port                    同上 p.1-43
-;   LDEPART        distance                     AS 語言參考手冊 90209-1025DE p.6-6
+;   LDEPART        distance                     AS 語言參考手冊 p.6-6
 ;
 ; 限制:埠號 8192-65535、timeout 1-60 秒、每元素上限 255 字元(E4007)、
 ;       單次收發 4096 bytes、需要 Ethernet 選購板卡(否則 E4054)
 ;
-; $DECODE 會「消耗」原字串,不是照索引取欄位:
-;   $DECODE(s$, ",", 0)  取出分隔符前的內容並移除
-;   $DECODE(s$, ",", 1)  取出分隔符本身並移除
-; 出處:F控傳送裝置同步功能 90210-1342DE p.56
+; 兩個語法地雷(都踩過):
+;   - CASE 的索引必須是數值,不能是字串(手冊 p.6-69)。
+;     所以指令字只能用 IF 鏈分派。
+;   - $DECODE 會「消耗」原字串,不是照索引取欄位:
+;       $DECODE(s$, ",", 0)  取出分隔符前的內容並移除
+;       $DECODE(s$, ",", 1)  取出分隔符本身並移除
+;     出處:傳送裝置同步功能手冊 90210-1342DE p.56
 ; =====================================================================
 
 .PROGRAM sugar_server()
 
-  port  = 10000              ; 監聽埠。必須落在 8192-65535
-  maxop = 3000               ; 緩衝動作數上限
-  tmo   = 30                 ; 通訊逾時 秒。手冊上限 60
-  base  = TRANS(450,0,-120,0,180,0)   ; 畫布原點,PC 端會用 base 指令覆蓋
+  port = 10000               ; 監聽埠。必須落在 8192-65535
+  tmo  = 30                  ; 通訊逾時 秒。手冊上限 60
+  eol$ = $CHR(10)            ; 封包內的換行。控制器若不吃,改成 ";"
+  base = TRANS(450,0,-120,0,180,0)    ; 預設值,PC 端會用 base 指令覆蓋
 
   SPEED 100 MM/S ALWAYS
   ACCURACY 3 ALWAYS
-  nop  = 0
-  quit = 0
-  eol$ = $CHR(10)            ; 封包內的動作分隔符。控制器若不吃換行,改成 ";"
+  lastv = -1
+  quit  = 0
 
 ; ---------- 建立連線 ----------
   ret = 999
@@ -91,16 +90,16 @@
   END
   PRINT "connected from ", ipa[0], ipa[1], ipa[2], ipa[3]
 
-; ---------- 主迴圈 ----------
+; ---------- 主迴圈:收字串 -> 立刻執行 ----------
 100 WHILE quit == 0 DO
     CALL sub_recv                      ; 收一包進 pkt$
     IF LEN(pkt$) == 0 THEN
       GOTO 100
     END
-110 line$ = $DECODE(pkt$, eol$, 0)     ; 一包可能有多行,逐行處理
+110 line$ = $DECODE(pkt$, eol$, 0)     ; 一包可能有多行,逐行做
     dmy$ = $DECODE(pkt$, eol$, 1)
     IF LEN(line$) > 0 THEN
-      CALL sub_exec
+      CALL sub_do
     END
     IF LEN(pkt$) > 0 THEN
       GOTO 110
@@ -118,61 +117,55 @@
 
 
 ; =====================================================================
-; sub_exec  解析一行並處理
+; sub_do  解析一行,立刻執行
+;
+;   移動指令之間不下 BREAK —— 下了控制器會逐點停,
+;   在糖畫的場合每個停頓都是一坨糖。要等到位由 PC 端明確送 brk。
+;   靠 ACCURACY 讓控制器把轉角連續 blend 過去。
 ; =====================================================================
-.PROGRAM sub_exec()
-; 注意:AS 的 CASE 索引必須是「數值」(手冊 p.6-69:Real value variable or
-; expression),不能用字串。所以指令字的分派只能用 IF 鏈,不能用 CASE。
+.PROGRAM sub_do()
   CALL sub_next
   cmd$ = fld$
 
-  IF cmd$ == "lmove" THEN               ; lmove,x,y,z,v
-    CALL sub_push
-    op[nop] = 1
+  IF cmd$ == "lmove" THEN
+    CALL sub_xyzv
+    LMOVE SHIFT(base BY vx, vy, vz)
     RETURN
   END
-  IF cmd$ == "jmove" THEN               ; jmove,x,y,z,v
-    CALL sub_push
-    op[nop] = 2
+
+  IF cmd$ == "jmove" THEN
+    CALL sub_xyzv
+    JMOVE SHIFT(base BY vx, vy, vz)
     RETURN
   END
-  IF cmd$ == "ldepart" THEN             ; ldepart,d,v
-    IF nop < maxop THEN
-      nop = nop + 1
-      CALL sub_next
-      pz[nop] = VAL(fld$)               ; 退開距離
-      CALL sub_next
-      pv[nop] = VAL(fld$)
-      op[nop] = 3
-    END
+
+  IF cmd$ == "ldepart" THEN            ; ldepart,d,v
+    CALL sub_next
+    vz = VAL(fld$)
+    CALL sub_next
+    CALL sub_speed
+    LDEPART vz
     RETURN
   END
-  IF cmd$ == "sig" THEN                 ; sig,n   正開負關
-    IF nop < maxop THEN
-      nop = nop + 1
-      CALL sub_next
-      pv[nop] = VAL(fld$)
-      op[nop] = 4
-    END
+
+  IF cmd$ == "sig" THEN                ; sig,n   正開負關
+    CALL sub_next
+    SIGNAL VAL(fld$)
     RETURN
   END
-  IF cmd$ == "wait" THEN                ; wait,t
-    IF nop < maxop THEN
-      nop = nop + 1
-      CALL sub_next
-      pv[nop] = VAL(fld$)
-      op[nop] = 5
-    END
+
+  IF cmd$ == "wait" THEN               ; wait,t
+    CALL sub_next
+    TWAIT VAL(fld$)
     RETURN
   END
-  IF cmd$ == "brk" THEN                 ; brk
-    IF nop < maxop THEN
-      nop = nop + 1
-      op[nop] = 6
-    END
+
+  IF cmd$ == "brk" THEN
+    BREAK
     RETURN
   END
-  IF cmd$ == "base" THEN                ; base,x,y,z,o,a,t  立即生效
+
+  IF cmd$ == "base" THEN               ; base,x,y,z,o,a,t
     CALL sub_next
     bx = VAL(fld$)
     CALL sub_next
@@ -188,45 +181,47 @@
     base = TRANS(bx, by, bz, bo, ba, bt)
     RETURN
   END
-  IF cmd$ == "acc" THEN                 ; acc,n  立即生效
+
+  IF cmd$ == "acc" THEN                ; acc,n
     CALL sub_next
     accv = VAL(fld$)
     ACCURACY accv ALWAYS
     RETURN
   END
-  IF cmd$ == "run" THEN                 ; run  執行緩衝
-    CALL sub_run
-    nop = 0
-    RETURN
-  END
-  IF cmd$ == "clr" THEN
-    nop = 0
-    RETURN
-  END
+
   IF cmd$ == "end" THEN
     quit = 1
     RETURN
   END
+
   CALL sub_err
 .END
 
 
 ; =====================================================================
-; sub_push  讀 x,y,z,v 存進緩衝
+; sub_xyzv  讀 x,y,z,v 四個欄位,並在速度有變時才下 SPEED
 ; =====================================================================
-.PROGRAM sub_push()
-  IF nop >= maxop THEN
-    RETURN
+.PROGRAM sub_xyzv()
+  CALL sub_next
+  vx = VAL(fld$)
+  CALL sub_next
+  vy = VAL(fld$)
+  CALL sub_next
+  vz = VAL(fld$)
+  CALL sub_next
+  CALL sub_speed
+.END
+
+
+; =====================================================================
+; sub_speed  fld$ 是速度。只有跟上次不同才下指令,不然行數會爆
+; =====================================================================
+.PROGRAM sub_speed()
+  spdv = VAL(fld$)
+  IF spdv <> lastv THEN
+    SPEED spdv MM/S ALWAYS
+    lastv = spdv
   END
-  nop = nop + 1
-  CALL sub_next
-  px[nop] = VAL(fld$)
-  CALL sub_next
-  py[nop] = VAL(fld$)
-  CALL sub_next
-  pz[nop] = VAL(fld$)
-  CALL sub_next
-  pv[nop] = VAL(fld$)
 .END
 
 
@@ -240,53 +235,7 @@
 
 
 ; =====================================================================
-; sub_run  照順序執行緩衝區裡的動作
-;
-;   移動指令之間「絕對不放 BREAK」—— 放了控制器會逐點停,
-;   在糖畫的場合每個停頓都是一坨糖。要等到位就由 PC 端明確送 brk。
-;   靠 ACCURACY + ALWAYS 讓控制器把轉角連續 blend 過去。
-; =====================================================================
-.PROGRAM sub_run()
-  lastv = -1
-  FOR i = 1 TO nop
-    CASE op[i] OF
-      VALUE 1:                         ; lmove
-        IF pv[i] <> lastv THEN
-          SPEED pv[i] MM/S ALWAYS
-          lastv = pv[i]
-        END
-        LMOVE SHIFT(base BY px[i], py[i], pz[i])
-
-      VALUE 2:                         ; jmove
-        IF pv[i] <> lastv THEN
-          SPEED pv[i] MM/S ALWAYS
-          lastv = pv[i]
-        END
-        JMOVE SHIFT(base BY px[i], py[i], pz[i])
-
-      VALUE 3:                         ; ldepart 沿工具 Z 退開
-        IF pv[i] <> lastv THEN
-          SPEED pv[i] MM/S ALWAYS
-          lastv = pv[i]
-        END
-        LDEPART pz[i]
-
-      VALUE 4:                         ; sig
-        SIGNAL pv[i]
-
-      VALUE 5:                         ; wait
-        TWAIT pv[i]
-
-      VALUE 6:                         ; brk
-        BREAK
-    END
-  END
-.END
-
-
-; =====================================================================
-; 通訊底層
-;   收發都不加換行字元。framing 靠「送一包就等回覆」。
+; 通訊底層。收發都不加換行當結尾,framing 靠「送一包就等回覆」。
 ; =====================================================================
 .PROGRAM sub_recv()
   pkt$ = ""
