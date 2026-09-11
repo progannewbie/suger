@@ -127,7 +127,7 @@ def main():
     if not v.json:
         sys.exit("要給 motion.json,或用 --fake-server")
 
-    d = json.load(open(v.json))
+    d = json.load(open(v.json, encoding="utf-8"))
     lines = to_lines(d)
     pkts = pack(lines)
 

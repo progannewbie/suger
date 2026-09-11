@@ -645,7 +645,7 @@ def main():
                "n_points": sum(len(s) for s in mm), "dots": dots,
                "draw_len_mm": round(draw, 1), "travel_len_mm": round(travel, 1),
                "strokes": mm},
-              open(v.out, "w"), ensure_ascii=False, indent=1)
+              open(v.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     print(f"筆劃 {len(mm)} 條 (含 {len(spirals)} 個螺旋色塊) + 糖點 {len(dots)} 個 / "
           f"座標 {sum(len(s) for s in mm)} 個 / 抬筆 {len(mm)+len(dots)-1} 次")

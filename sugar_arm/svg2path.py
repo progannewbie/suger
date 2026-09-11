@@ -194,7 +194,7 @@ def main():
     ap.add_argument("--preview", default=None)
     v = ap.parse_args()
 
-    subs = parse_svg(open(v.svg).read())
+    subs = parse_svg(open(v.svg, encoding="utf-8").read())
     if not subs:
         sys.exit("SVG 裡沒抓到 path d=\"...\"")
 
@@ -220,7 +220,7 @@ def main():
     json.dump({"units":"mm", "size_mm":[round(v.width,2), h_mm],
                "n_strokes":len(mm), "n_points":sum(len(s) for s in mm),
                "draw_len_mm":round(draw,1), "travel_len_mm":round(travel,1),
-               "strokes":mm}, open(v.out,"w"), ensure_ascii=False, indent=1)
+               "strokes":mm}, open(v.out,"w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     print(f"筆劃 {len(mm)} 條 / 點 {sum(len(s) for s in mm)} 個 / 抬筆 {len(mm)-1} 次")
     print(f"成品 {v.width:.0f} x {h_mm:.0f} mm,畫線 {draw:.0f} mm,空走 {travel:.0f} mm")

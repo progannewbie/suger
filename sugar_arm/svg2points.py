@@ -176,7 +176,7 @@ def main():
                "widths": [[round(float(x), 3) for x in w] for w in out_w],
                "strokes": [[[round(float(p[0]), 3), round(float(p[1]), 3)]
                             for p in s] for s in out_s]},
-              open(v.out, "w"), ensure_ascii=False, indent=1)
+              open(v.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     print(f"容差 {tol:.2f} mm (糖線寬 {bead} mm 的 1/4)")
     print(f"點位 {n0} -> {n1}  省 {100*(1-n1/max(n0,1)):.0f}%")

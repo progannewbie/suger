@@ -107,7 +107,7 @@ def main():
     ap.add_argument("--max-steps", type=int, default=2500, help="單一程式最大行數,超過就拆")
     v = ap.parse_args()
 
-    d = json.load(open(v.json))
+    d = json.load(open(v.json, encoding="utf-8"))
     strokes = d["strokes"]
     bx, by, bz = [float(x) for x in v.base.split(",")]
     o, a, t = [float(x) for x in v.pose.split(",")]
@@ -154,7 +154,7 @@ def main():
             out.append(f"  CALL {v.name}{bi+1}")
         out.append(".END\n")
 
-    open(v.out, "w").write("\n".join(out))
+    open(v.out, "w", encoding="utf-8").write("\n".join(out))
     print(f"{len(strokes)} 筆劃 + {len(dots)} 糖點 -> {len(batches)} 個程式, "
           f"{len(out)} 行 -> {v.out}")
 

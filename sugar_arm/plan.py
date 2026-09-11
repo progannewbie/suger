@@ -108,9 +108,13 @@ def main():
     ap.add_argument("--dwell", type=float, default=0.15, help="下筆後等糖絲成形 s")
     ap.add_argument("--cut", type=float, default=0.10, help="關閥後等糖絲斷 s")
     ap.add_argument("--dot-ms", type=float, default=120.0, help="糖點停留 ms/mm 直徑")
+    ap.add_argument("--table", default=None,
+                    help="另外輸出一份人看的點位表,手動示教時對照用")
+    ap.add_argument("--area", type=float, default=0,
+                    help="繪圖區邊長 mm。給了就檢查會不會超出")
     v = ap.parse_args()
 
-    d = json.load(open(v.json))
+    d = json.load(open(v.json, encoding="utf-8"))
     mv, info = plan(d, v.zup, v.signal, v.draw_speed, v.max_speed,
                     v.travel_speed, v.speed_quant, v.air_move,
                     v.dwell, v.cut, v.dot_ms)
@@ -136,14 +140,57 @@ def main():
                "est_seconds": est,
                "strokes": info,
                "moves": mv},
-              open(v.out, "w"), ensure_ascii=False, indent=1)
+              open(v.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     print("動作計畫:" + "  ".join(f"{k} {n}" for k, n in
                                   sorted(kinds.items(), key=lambda x: -x[1])))
     for s in info:
         print(f"  筆劃 {s['stroke']}:{s['points']} 點  "
               f"速度 {s['v_min']:g}~{s['v_max']:g} mm/s")
+    # 範圍檢查
+    xs = [m["x"] for m in mv if "x" in m]
+    ys = [m["y"] for m in mv if "y" in m]
+    if xs:
+        rx, ry = max(abs(min(xs)), abs(max(xs))), max(abs(min(ys)), abs(max(ys)))
+        print(f"相對 org 的最大偏移:X ±{rx:.1f}  Y ±{ry:.1f} mm")
+        if v.area:
+            half = v.area / 2
+            ok = "在範圍內" if rx <= half and ry <= half else ">>> 超出範圍 <<<"
+            print(f"繪圖區 {v.area:.0f}x{v.area:.0f}(半邊 {half:.0f}mm):{ok}")
+
     print(f"共 {len(mv)} 個動作,預估 {est} 秒 -> {v.out}")
+
+    if v.table:
+        with open(v.table, "w", encoding="utf-8") as f:
+            f.write(f"# 點位表 —— 手動示教對照用\n")
+            f.write(f"# 來源 {os.path.basename(v.json)}\n")
+            f.write(f"# 座標是相對 org(繪圖區中心)的偏移,單位 mm\n")
+            f.write(f"# Z 為 0 表示貼著畫布,正值是抬起來\n")
+            if base:
+                f.write(f"# org = TRANS({','.join(f'{x:g}' for x in base)})\n")
+            f.write("#\n")
+            f.write(f"{'#':>4} {'動作':8} {'X':>9} {'Y':>9} {'Z':>7} "
+                    f"{'速度':>6}  說明\n")
+            f.write("-" * 62 + "\n")
+            for i, m in enumerate(mv, 1):
+                o = m["op"]
+                if o in ("lmove", "jmove"):
+                    f.write(f"{i:4d} {o:8} {m['x']:9.2f} {m['y']:9.2f} "
+                            f"{m['z']:7.1f} {m['v']:6.0f}  {m.get('why','')}\n")
+                elif o == "ldepart":
+                    f.write(f"{i:4d} {o:8} {'':9} {'':9} {m['d']:7.1f} "
+                            f"{m['v']:6.0f}  {m.get('why','沿工具軸退開')}\n")
+                elif o == "sig":
+                    f.write(f"{i:4d} {o:8} {'':9} {'':9} {'':7} "
+                            f"{'':6}  DO {'ON' if m['n']>0 else 'OFF'}"
+                            f"  {m.get('why','')}\n")
+                elif o == "wait":
+                    f.write(f"{i:4d} {o:8} {'':9} {'':9} {'':7} "
+                            f"{'':6}  停 {m['t']}s  {m.get('why','')}\n")
+                else:
+                    f.write(f"{i:4d} {o:8} {'':9} {'':9} {'':7} {'':6}  "
+                            f"{m.get('why','')}\n")
+        print(f"點位表 -> {v.table}")
     if base is None:
         print("提醒:沒給 --base,手臂會用它自己的預設原點")
 

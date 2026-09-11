@@ -226,7 +226,7 @@ def main():
                "n_chars": n_char, "n_strokes": len(mm), "n_dots": 0, "dots": [],
                "n_points": sum(len(s) for s in mm),
                "draw_len_mm": round(draw, 1), "travel_len_mm": round(travel, 1),
-               "strokes": mm}, open(v.out, "w"), ensure_ascii=False, indent=1)
+               "strokes": mm}, open(v.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
     if v.svg:
         write_svg(v.svg,

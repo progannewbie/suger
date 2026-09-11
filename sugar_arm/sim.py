@@ -163,13 +163,13 @@ def main():
         src = f"收到 {n} 個封包"
     else:
         import stream
-        d = json.load(open(v.json))
+        d = json.load(open(v.json, encoding="utf-8"))
         lines = stream.to_lines(d)
         n = run_offline(arm, lines)
         src = f"{n} 個動作(離線,完全沒用到網路)"
 
     arm.emit(".END")
-    open(v.trace, "w").write("\n".join(arm.trace) + "\n")
+    open(v.trace, "w", encoding="utf-8").write("\n".join(arm.trace) + "\n")
 
     tot = sum(arm.n.values())
     print(f"\n{src}")
