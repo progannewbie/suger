@@ -93,7 +93,7 @@ $PY sugar_arm/stream.py points.json --host 127.0.0.1 --port 10123   # 另一個
 
 | 程式 | 用途 | 需要 PC? |
 |---|---|---|
-| `sugar_server.as` | 常駐接收器。收字串 → 填緩衝 → `run` 時連續走完 | 要 |
+| `sugar_server.as` | 接收器。收 Ethernet 字串,照字串講的去動 | 要 |
 | `sugar_calib.as` | 畫布三點校正,用 `FRAME()` 算出座標系 | 不用 |
 | `sugar_test.as` | 自測:方形、短線段計時、糖閥時機 | 不用 |
 
@@ -109,7 +109,7 @@ $PY sugar_arm/stream.py points.json --host 127.0.0.1 --port 10123   # 另一個
    用碼表量。理論值都是 2.0 秒,差越多代表 Standard motion type 的影響越大,
    PC 端的 `--min-seg` 就要調越大。
 
-3. **`sugar_server` + PC 連線** —— 驗證 Ethernet、協定、緩衝。手臂在空中
+3. **`sugar_server` + PC 連線** —— 驗證 Ethernet 與協定。手臂在空中
    把整個字「畫」一次,看動作順不順、會不會超出行程、姿態有沒有突變。
 
 4. **DO 訊號時序** —— `sugar_test` step 3,用示教器的 IO 監看畫面看
@@ -169,8 +169,7 @@ wait,t             停留 t 秒
 brk                等動作到位
 base,x,y,z,o,a,t   畫布原點(立即)
 acc,n              精度 mm(立即)
-run                一次連續執行緩衝區
-clr / end
+end                收工
 ```
 
 一個封包用換行塞多個動作,上限 250 字元。手臂每收一包回 `OK` 或 `ER`。
@@ -178,8 +177,8 @@ clr / end
 用 `readline()` 等換行會卡死,framing 靠「送一包就等回覆」。
 
 **手臂程式是固定的。** `sugar_server.as` 載進控制器就不用再改 ——
-它完全不知道什麼是糖畫,只做收字串、存緩衝、照順序執行。
-所有決策都在 PC 端。
+它做的事只有一件:收 Ethernet 字串,照字串講的去動。
+完全不知道什麼是糖畫。所有決策都在 PC 端。
 
 ### 離線模擬
 
