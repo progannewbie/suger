@@ -250,7 +250,8 @@ def main():
     print(f"版面 {W:.0f} x {H:.0f} mm,畫線 {draw:.0f} mm,空走 {travel:.0f} mm")
     if n_silk:
         print(f"牽絲 {n_silk} 條,共 {silk_len:.0f} mm (佔畫線 {100*silk_len/max(draw,1e-9):.0f}%)")
-    print(f"預估 @80mm/s: 約 {est:.0f} 秒 -> {v.out}")
+    print(f"預估 @80mm/s: 約 {est:.0f} 秒"
+          f"{f' -> {v.out}' if v.out else ''}")
 
     if v.preview:
         from PIL import Image, ImageDraw

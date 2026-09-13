@@ -657,7 +657,8 @@ def main():
               f"(佔總畫線 {100*add_len_px*scale/max(draw,1e-9):.0f}%)")
     est = draw/80 + travel/300 + (len(mm) + len(dots)) * 0.75   # 每次抬筆約 0.75s
     print(f"預估 @80mm/s: 約 {est:.0f} 秒 (其中抬筆佔 {(len(mm)+len(dots))*0.75:.0f} 秒)")
-    print(f"-> {v.out}")
+    if v.out:
+        print(f"座標 JSON -> {v.out}")
 
     if v.svg:
         write_svg(v.svg, [np.asarray(x, float) for x in mm],

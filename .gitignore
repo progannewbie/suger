@@ -23,3 +23,6 @@ sugar_arm/corgi_path.json
 *.jpg
 *.jpeg
 *.webp
+
+# 手動跑出來的產出
+out/
