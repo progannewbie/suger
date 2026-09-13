@@ -120,7 +120,8 @@ from svgout import write_svg
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("text", help="要寫的字,例如 新年快樂。用 / 換行")
-    ap.add_argument("-o", "--out", default="path.json")
+    ap.add_argument("-o", "--out", default=None,
+                    help="舊格式座標 JSON。Skill 1 的正式產出是 --svg,這個只在不接 Skill 2 時才需要")
     ap.add_argument("--size", type=float, default=40.0, help="字高 mm")
     ap.add_argument("--cols", type=int, default=0, help="每行幾字,0=不自動換行")
     ap.add_argument("--gap", type=float, default=0.15, help="字距,字高的倍數")
@@ -221,7 +222,8 @@ def main():
     W, H = round(float(x1-x0), 2), round(float(y1-y0), 2)
 
     wid = [[round(float(x), 3) for x in w] for w in widths]
-    json.dump({"units": "mm", "size_mm": [W, H], "text": v.text,
+    if v.out:
+     json.dump({"units": "mm", "size_mm": [W, H], "text": v.text,
                "brush": bool(v.brush), "widths": wid,
                "n_chars": n_char, "n_strokes": len(mm), "n_dots": 0, "dots": [],
                "n_points": sum(len(s) for s in mm),

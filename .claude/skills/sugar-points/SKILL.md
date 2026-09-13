@@ -29,10 +29,11 @@ description: 把筆劃 SVG 轉成機械手臂要走的座標點位,並用曲率�
 
 ```bash
 PY=~/Documents/義大/.venv/bin/python
-$PY ~/Documents/義大/sugar_arm/svg2points.py in.svg -o points.json --report
+$PY ~/Documents/義大/sugar_arm/svg2points.py in.svg -o points.json \
+    --report --preview points.png
 ```
 
-`--report` 會列出每一筆的精簡前後,值得每次都開。
+`--report` 列出每一筆的精簡前後,`--preview` 畫出點位分佈。兩個都值得每次都開。
 
 ## 精簡分四步
 
@@ -60,7 +61,7 @@ $PY ~/Documents/義大/sugar_arm/svg2points.py in.svg -o points.json --report
 
 ## 驗收
 
-**看點位分佈圖,不要只看點數。**
+**看 `--preview` 畫出來的點位分佈圖,不要只看點數。**
 
 正確的樣子是**直線段稀、曲線段密**。如果整條路徑點距均勻,代表自適應沒生效
 ——通常是容差給太小,退化成等距取樣。

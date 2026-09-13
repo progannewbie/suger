@@ -40,8 +40,12 @@ SA=~/Documents/義大/sugar_arm
 
 ```bash
 $PY $SA/text2path.py 台灣尚勇 --size 45 --cols 2 --brush --link char \
-    --svg out.svg -o out.json --preview out.png
+    --svg out.svg --preview out.png
 ```
+
+Skill 1 的正式產出是 **`--svg`**,`--preview` 是給人看的。
+`-o` 那個舊格式 JSON 現在是可選的 —— 座標是 Skill 2 的事,不接 Skill 2
+時才需要。
 
 ### --link 決定書體
 
@@ -89,8 +93,7 @@ $PY $SA/text2path.py 台灣尚勇 --size 45 --cols 2 --brush --link char \
 ## 描圖(圖片)
 
 ```bash
-$PY $SA/img2path.py 圖.jpg --width 110 --one-stroke --svg out.svg \
-    -o out.json --preview out.png
+$PY $SA/img2path.py 圖.jpg --width 110 --one-stroke --svg out.svg --preview out.png
 ```
 
 參數會從量到的線寬自動推導,**先不要手動指定**。跑完看它印出的那行:
@@ -120,6 +123,7 @@ $PY $SA/img2path.py 圖.jpg --width 110 --one-stroke --svg out.svg \
 | 症狀 | 原因 | 處置 |
 |---|---|---|
 | 「字形資料庫沒有 X」 | 罕用字/異體字 | 換字,或改用手寫圖片走描圖 |
+| 粗筆書法描出來垮掉 | 自動參數把粗筆寬度當線寬,門檻推得太大 | 手動給 `--eps 1.0 --min-len 10 --join 8`。粗筆書法量到的「線寬」是筆劃寬不是線寬 |
 | 圖片跑出一坨 | 走了 edge 模式(實心/漸層/照片) | 正常行為,但告訴使用者這種圖不適合糖畫 |
 | 圖片一片空白 | 白線黑底沒被偵測到 | `--invert` |
 | 筆劃爆到上百條 | 圖太雜 | `--max-strokes 40` 讓它自動收斂 |

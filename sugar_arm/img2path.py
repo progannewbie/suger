@@ -509,7 +509,8 @@ def one_stroke(strokes, tol=2.5):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
-    ap.add_argument("-o", "--out", default="path.json")
+    ap.add_argument("-o", "--out", default=None,
+                    help="舊格式座標 JSON。Skill 1 的正式產出是 --svg,這個只在不接 Skill 2 時才需要")
     ap.add_argument("--width", type=float, default=120.0, help="成品寬度 mm")
     ap.add_argument("--max-dim", type=int, default=500, help="處理解析度 px")
     ap.add_argument("--eps", type=float, default=None, help="簡化容差 px (預設自動)")
@@ -640,7 +641,8 @@ def main():
     travel = sum(math.dist(mm[i-1][-1], mm[i][0]) for i in range(1, len(mm)))
     h_mm = round(float((y1 - y0) * scale), 2)
 
-    json.dump({"units": "mm", "size_mm": [round(v.width, 2), h_mm],
+    if v.out:
+     json.dump({"units": "mm", "size_mm": [round(v.width, 2), h_mm],
                "n_strokes": len(mm), "n_dots": len(dots),
                "n_points": sum(len(s) for s in mm), "dots": dots,
                "draw_len_mm": round(draw, 1), "travel_len_mm": round(travel, 1),

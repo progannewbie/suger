@@ -145,6 +145,9 @@ def main():
     ap.add_argument("--max-speed", type=float, default=0, help="0=畫線速度的 4 倍")
     ap.add_argument("--speed-quant", type=float, default=20.0, help="速度量化級距 mm/s")
     ap.add_argument("--report", action="store_true", help="印出每筆的精簡前後")
+    ap.add_argument("--preview", default=None,
+                    help="輸出點位分佈圖。直線段該稀、曲線段該密,"
+                         "點距均勻代表自適應沒生效")
     v = ap.parse_args()
 
     strokes, widths, W, H, meta = parse_svg(v.svg)
@@ -181,6 +184,31 @@ def main():
     print(f"容差 {tol:.2f} mm (糖線寬 {bead} mm 的 1/4)")
     print(f"點位 {n0} -> {n1}  省 {100*(1-n1/max(n0,1)):.0f}%")
     print(f"筆劃 {len(out_s)} 條,畫線 {draw:.0f} mm,空走 {travel:.0f} mm -> {v.out}")
+
+    if v.preview:
+        from PIL import Image, ImageDraw
+        PW = 900
+        PH = max(int(PW * H / max(W, 1e-9)), 80)
+        im = Image.new("RGB", (PW + 40, PH + 40), "white")
+        d = ImageDraw.Draw(im)
+        bead_px = max(int(bead / W * PW), 1)
+        def px(p):
+            return (int((p[0] / W + 0.5) * PW) + 20,
+                    int((0.5 - p[1] / H) * PH) + 20)
+        for i, (s0, w0) in enumerate(zip(out_s, out_w)):   # 糖線
+            pts = [px(p) for p in s0]
+            for k in range(1, len(pts)):
+                bw_ = max(int(bead_px * float(w0[k])), 1)
+                d.line([pts[k-1], pts[k]], fill=(214, 178, 140), width=bw_)
+            if i:                                           # 空走
+                d.line([px(out_s[i-1][-1]), px(s0[0])], fill=(170, 190, 255), width=1)
+        for s0 in out_s:                                    # 點位標記
+            for p in s0:
+                q = px(p)
+                d.ellipse((q[0]-2, q[1]-2, q[0]+2, q[1]+2), fill=(20, 60, 200))
+        im.save(v.preview)
+        print(f"點位分佈 -> {v.preview}  (淡糖色=糖線,藍點=實際點位,"
+              f"淡藍線=抬筆空走)")
 
 if __name__ == "__main__":
     main()
