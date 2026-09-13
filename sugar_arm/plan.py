@@ -110,6 +110,8 @@ def main():
     ap.add_argument("--dot-ms", type=float, default=120.0, help="糖點停留 ms/mm 直徑")
     ap.add_argument("--table", default=None,
                     help="另外輸出一份人看的點位表,手動示教時對照用")
+    ap.add_argument("--csv", default=None,
+                    help="只輸出移動點的座標 CSV,給試算表或手動輸入用")
     ap.add_argument("--area", type=float, default=0,
                     help="繪圖區邊長 mm。給了就檢查會不會超出")
     v = ap.parse_args()
@@ -191,6 +193,18 @@ def main():
                     f.write(f"{i:4d} {o:8} {'':9} {'':9} {'':7} {'':6}  "
                             f"{m.get('why','')}\n")
         print(f"點位表 -> {v.table}")
+
+    if v.csv:
+        with open(v.csv, "w", encoding="utf-8") as f:
+            f.write("no,op,X,Y,Z,speed\n")
+            k = 0
+            for m in mv:
+                if m["op"] not in ("lmove", "jmove"):
+                    continue
+                k += 1
+                f.write(f"{k},{m['op']},{m['x']:.2f},{m['y']:.2f},"
+                        f"{m['z']:g},{m['v']:g}\n")
+        print(f"座標 CSV -> {v.csv}  ({k} 個移動點)")
     if base is None:
         print("提醒:沒給 --base,手臂會用它自己的預設原點")
 
