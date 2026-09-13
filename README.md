@@ -52,8 +52,7 @@ curl -o sugar_arm/data/graphics.txt \
 PY=.venv/bin/python
 
 # Skill 1: 字 → 一筆到底的毛筆 SVG
-$PY sugar_arm/text2path.py 台灣尚勇 --size 45 --cols 2 --brush --link char \
-    --svg out.svg -o out.json --preview out.png
+$PY sugar_arm/text2path.py 台灣尚勇 --size 45 --cols 2 --svg out.svg --preview out.png
 
 # Skill 2: SVG → 手臂座標
 $PY sugar_arm/svg2points.py out.svg -o points.json --report
@@ -73,8 +72,10 @@ $PY sugar_arm/stream.py motion.json --host 192.168.0.2
 | 值 | 書體 | 抬筆次數(4 字) |
 |---|---|---|
 | `none` | 楷書 | ~50 |
-| `char` | 行書(字內連筆) | **3** |
+| **`char`** | 行書(字內連筆) | **3** |
 | `all` | 草書(整幅一筆) | **0** |
+
+`char` 和毛筆粗細都是預設值。
 
 ### 畫圖
 

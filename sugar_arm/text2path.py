@@ -129,10 +129,12 @@ def main():
     ap.add_argument("--vertical", action="store_true", help="直式書寫(由上往下)")
     ap.add_argument("--step", type=float, default=1.2, help="等弧長取樣間距 mm")
     ap.add_argument("--bead", type=float, default=2.5, help="糖線寬 mm,只影響預覽")
-    ap.add_argument("--brush", action="store_true",
-                    help="毛筆粗細:起筆頓、收筆出鋒(靠速度控制)")
-    ap.add_argument("--link", choices=["none", "char", "all"], default="none",
-                    help="牽絲連接範圍。char=字內連筆(行書) all=整幅一線到底")
+    ap.add_argument("--brush", action=argparse.BooleanOptionalAction, default=True,
+                    help="毛筆粗細:起筆頓、收筆出鋒(靠速度控制)。"
+                         "--no-brush 關掉,得到等寬線")
+    ap.add_argument("--link", choices=["none", "char", "all"], default="char",
+                    help="牽絲連接範圍。none=楷書(筆劃分離) "
+                         "char=行書(字內連筆,預設) all=草書(整幅一線到底)")
     ap.add_argument("--silk-width", type=float, default=0.28, help="牽絲相對粗細")
     ap.add_argument("--curve-gain", type=float, default=0.80,
                     help="轉折處加粗的強度(模擬頓筆)。0=關閉")
