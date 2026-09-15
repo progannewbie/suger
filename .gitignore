@@ -12,6 +12,7 @@ sugar_arm/data/graphics.txt
 # 產出物(每次跑都會重生)
 *.as
 !sugar_arm/arm/*.as
+!Demo2/arm/*.as
 *_preview.png
 *_path.json
 *.pts.json
