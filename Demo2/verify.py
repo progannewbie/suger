@@ -6,9 +6,41 @@
 """
 import json, math, sys, glob, os
 
+# 糖線寬估計 mm。明天量到實際值後改這裡,或用 --bead 覆寫。
+BEAD_MM = 2.5
+
+# 自我交叉的圖形,線一定會碰,不適用沾黏檢查
+SELF_CROSSING = {"star"}
+
 RULES = """規則來源:Demo2/doc/技術規格.md 第 3.2 節"""
 
-def check(path):
+def clearance(pts, min_gap_mm=15.0):
+    """最近的非相鄰線距。路徑上相隔夠遠、空間上卻很近的兩點,就是會沾黏的地方。
+
+    只用標準函式庫,所以取樣點數壓在能接受的範圍。
+    """
+    seg = [0.0]
+    for a, b in zip(pts[:-1], pts[1:]):
+        seg.append(seg[-1] + math.dist(a, b))
+    total = seg[-1]
+    n = 800
+    q, tt = [], []
+    for k in range(n):
+        t = total * k / (n - 1)
+        i = min(range(len(seg)), key=lambda j: abs(seg[j] - t))
+        q.append(pts[i]); tt.append(seg[i])
+    best = float("inf")
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(tt[i] - tt[j]) <= min_gap_mm:
+                continue
+            d = math.dist(q[i], q[j])
+            if d < best:
+                best = d
+    return best
+
+
+def check(path, bead=BEAD_MM):
     raw = open(path, encoding="utf-8").read()
     d = json.loads(raw)
     c = d["op_counts"]
@@ -38,16 +70,33 @@ def check(path):
                 f"預估 {d['est_seconds']} 秒,上限 45 秒"))
     out.append(("離基座距離已知", bool(r),
                 f"{min(r):.0f} ~ {max(r):.0f} mm"))
-    return out, (min(r), max(r)) if r else None
+
+    shape = d.get("source_shape") or ""
+    pts = [(m["x"], m["y"]) for m in mv if m["op"] == "lmove" and m.get("z") == 0]
+    gap = None
+    if shape in SELF_CROSSING:
+        out.append((f"圈間不沾黏", True,
+                    f"{shape} 本來就自我交叉,不適用"))
+    elif len(pts) > 3:
+        gap = clearance(pts)
+        out.append(("圈間不沾黏", gap > bead,
+                    f"最近線距 {gap:.1f} mm,糖線寬估 {bead:g} mm。"
+                    f"線寬超過 {gap:.1f} mm 就會黏在一起"))
+    return out, ((min(r), max(r)) if r else None), gap
 
 
 def main():
-    files = sys.argv[1:] or sorted(glob.glob("Demo2/out/*_motion.json"))
+    args = [a for a in sys.argv[1:] if not a.startswith("--bead")]
+    bead = BEAD_MM
+    for a in sys.argv[1:]:
+        if a.startswith("--bead="):
+            bead = float(a.split("=", 1)[1])
+    files = args or sorted(glob.glob("Demo2/out/*_motion.json"))
     if not files:
         sys.exit("找不到 motion.json")
     bad = 0
     for f in files:
-        out, r = check(f)
+        out, r, gap = check(f, bead)
         fails = [x for x in out if not x[1]]
         print(f"\n{os.path.basename(f)}")
         for name, ok, note in out:
@@ -55,7 +104,8 @@ def main():
             print(f"  {mark}  {name:14} {note if not ok else ''}")
         if r:
             print(f"        離基座 {r[0]:.0f} ~ {r[1]:.0f} mm"
-                  f"  內外圈角速度比 {r[1]/r[0]:.2f}")
+                  f"  內外圈角速度比 {r[1]/r[0]:.2f}"
+                  + (f"  線距餘裕 {gap:.1f} mm" if gap else ""))
         bad += len(fails)
     print(f"\n{'PASS —— 全部通過' if not bad else f'FAIL —— {bad} 項未通過'}")
     sys.exit(1 if bad else 0)
