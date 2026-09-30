@@ -1,0 +1,4 @@
+# Dependencies for src/main.py. The UI uses tkinter from the standard library.
+# Keep this file ASCII-only: pip on Windows may read it with the locale codec (cp950).
+numpy>=1.24
+pillow>=10.0
