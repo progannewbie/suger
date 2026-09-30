@@ -494,10 +494,57 @@ def euler_path(nodes, edges, start):
         pts.extend(seg[1:] if pts else seg)
     return np.asarray(pts, float) if pts else None
 
+def _is_loop(s, tol):
+    return len(s) > 3 and math.dist(s[0], s[-1]) <= tol
+
+def _rotate_loop(s, k):
+    """封閉圈改從第 k 點起筆,並重新閉合"""
+    ring = s[:-1]
+    return np.vstack([ring[k:], ring[:k], ring[k:k+1]])
+
+def seam_loops(strokes, tol=2.5):
+    """封閉圈的接縫轉到離別筆最近的地方。
+
+    補線只能接在端點上,而封閉圈唯一的端點是它的接縫 —— 位置取決於
+    骨架從哪裡開始追,等於隨機。空心字的外框和內洞各一圈時,
+    接縫常常一上一下,補出一條斜穿整個字的長線。
+    先把接縫轉到兩圈最靠近處,補線就只剩最短那一小段。
+    """
+    strokes = [np.asarray(s, float) for s in strokes]
+    loops = {i for i, s in enumerate(strokes) if _is_loop(s, tol)}
+    fixed = set()
+    for i in sorted(loops):
+        if i in fixed:
+            continue
+        mine = strokes[i][:-1]
+        best = None
+        for j, t in enumerate(strokes):
+            if j == i:
+                continue
+            if j not in loops:
+                cand = t[[0, -1]]            # 開放筆劃只能從兩端接
+            elif j in fixed:
+                cand = t[:1]                 # 已定好接縫的圈只剩接縫
+            else:
+                cand = t[:-1]
+            D = np.hypot(mine[:, None, 0] - cand[None, :, 0],
+                         mine[:, None, 1] - cand[None, :, 1])
+            ki, kj = divmod(int(D.argmin()), D.shape[1])
+            if best is None or D[ki, kj] < best[0]:
+                best = (D[ki, kj], j, ki, kj)
+        if best is None:
+            continue
+        _, j, ki, kj = best
+        strokes[i] = _rotate_loop(strokes[i], ki); fixed.add(i)
+        if j in loops and j not in fixed:
+            strokes[j] = _rotate_loop(strokes[j], kj); fixed.add(j)
+    return strokes
+
 def one_stroke(strokes, tol=2.5):
     """把多筆合成一筆。回傳 (單一筆劃, 補線總長px, 補線條數)"""
     if len(strokes) < 2:
         return strokes[0] if strokes else None, 0.0, 0
+    strokes = seam_loops(strokes, tol)
     nodes, edges = build_graph(strokes, tol)
     add1 = connect_components(nodes, edges)
     add2, odd = eulerize(nodes, edges)
