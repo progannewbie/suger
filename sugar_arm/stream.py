@@ -17,8 +17,16 @@
 """
 import argparse, json, socket, sys, time
 
-# 手冊 90210-1344DE p.1-41:TCP_RECV 每元素上限 255 字元(對應 E4007)
-# 留餘裕,避免卡在邊界
+# 封包格式:每行結尾 \n,封包結尾多一個空行 —— 整包以 "\n\n" 收尾。
+# 手臂端 sub_packet 看到這個結尾才回覆,所以封包可以超過 255 字:
+# TCP_RECV 會切成多個元素,跨元素的行由手臂端接回去。
+# 但「單行」不能超過 MAXLINE —— 要跟手臂端 sugar_init 的 maxline 一致
+# (rmax 190 + maxline 64 <= 255,AS 字串上限)。
+EOP = "\n\n"
+MAXLINE = 64
+# 預設仍是 250:Demo2 的 pot_server.as 是舊版收法,只讀 $rbuf[0],
+# 超過 255 會被截斷。新版 sugar_server.as 實機驗證過後可用 --maxlen 加大;
+# 一包越大,手臂執行完才回 OK 越久,PC 等回覆的逾時是 30 秒。
 MAXLEN = 250
 
 def to_lines(d):
@@ -42,26 +50,37 @@ def to_lines(d):
             out.append(o)
         else:
             sys.exit(f"motion.json 裡有不認得的動作:{o}")
+    for ln in out:
+        if len(ln) > MAXLINE:
+            sys.exit(f"單行 {len(ln)} 字元,超過手臂端上限 {MAXLINE}:{ln}")
     return out
 
 def pack(lines, maxlen=MAXLEN):
-    """多行塞進同一個封包,塞滿就換一包"""
+    """多行塞進同一個封包,塞滿就換一包。每包以 EOP 收尾。"""
     out, cur = [], ""
     for ln in lines:
-        add = ln if not cur else "\n" + ln
-        if len(cur) + len(add) > maxlen:
-            out.append(cur); cur = ln
+        add = ln + "\n"
+        if cur and len(cur) + len(add) + 1 > maxlen:
+            out.append(cur + "\n"); cur = add
         else:
             cur += add
     if cur:
-        out.append(cur)
+        out.append(cur + "\n")
     return out
+
+def unpack(buf):
+    """假手臂 / 模擬器用:從累積的資料切出一個完整封包,沒收完回 None"""
+    if EOP not in buf:
+        return None, buf
+    pkt, rest = buf.split(EOP, 1)
+    return pkt, rest
 
 class Link:
     """一問一答:送一包、等一包。
 
-    不加換行當封包結尾 —— AS 端的 TCP_SEND 是把字串原樣送出,不會補 \\n,
-    用 readline() 等換行會直接卡死。framing 靠「送完就等回覆」。
+    送出的封包以 "\\n\\n" 收尾,手臂端靠它判斷一包收完了。
+    回覆方向沒有結尾 —— AS 端的 TCP_SEND 把字串原樣送出,不會補 \\n,
+    用 readline() 等換行會直接卡死。回覆的 framing 靠「送完就等回覆」。
     """
     def __init__(self, host, port, dry, timeout=30.0):
         self.dry, self.n, self.s = dry, 0, None
@@ -71,8 +90,6 @@ class Link:
 
     def send(self, pkt):
         self.n += 1
-        if len(pkt) > MAXLEN:
-            sys.exit(f"封包 {len(pkt)} 字元,超過上限 {MAXLEN}")
         if self.dry:
             print(pkt)
             return
@@ -94,11 +111,15 @@ def fake_server(port):
         c, a = srv.accept()
         print(f"連線來自 {a}", flush=True)
         npkt = nline = longest = 0
+        buf = ""
         while True:
-            data = c.recv(4096)
-            if not data:
-                break
-            pkt = data.decode("ascii", "replace")
+            pkt, buf = unpack(buf)
+            if pkt is None:
+                data = c.recv(4096)
+                if not data:
+                    break
+                buf += data.decode("ascii", "replace")
+                continue
             npkt += 1
             lines = [x for x in pkt.split("\n") if x.strip()]
             nline += len(lines)
@@ -120,6 +141,8 @@ def main():
     ap.add_argument("--port", type=int, default=10000)
     ap.add_argument("--dry-run", action="store_true", help="只印字串,不連線")
     ap.add_argument("--fake-server", action="store_true")
+    ap.add_argument("--maxlen", type=int, default=MAXLEN,
+                    help=f"每包字元上限,預設 {MAXLEN}(相容舊版 pot_server.as)")
     v = ap.parse_args()
 
     if v.fake_server:
@@ -129,7 +152,7 @@ def main():
 
     d = json.load(open(v.json, encoding="utf-8"))
     lines = to_lines(d)
-    pkts = pack(lines)
+    pkts = pack(lines, v.maxlen)
 
     link = Link(v.host, v.port, v.dry_run)
     t0 = time.time()

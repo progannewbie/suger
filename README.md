@@ -99,7 +99,7 @@ $PY sugar_arm/stream.py motion.json --host 127.0.0.1 --port 10123   # 另一個
 
 | 程式 | 用途 | 需要 PC? |
 |---|---|---|
-| `sugar_server.as` | 接收器。收 Ethernet 字串,照字串講的去動 | 要 |
+| `sugar_server.as` | 接收器。執行 `sugar_main`;BASE / TOOL 等設定集中在 `sugar_init` | 要 |
 | `sugar_calib.as` | 畫布三點校正,用 `FRAME()` 算出座標系 | 不用 |
 | `sugar_test.as` | 自測:方形、短線段計時、糖閥時機 | 不用 |
 
@@ -115,7 +115,7 @@ $PY sugar_arm/stream.py motion.json --host 127.0.0.1 --port 10123   # 另一個
    用碼表量。理論值都是 2.0 秒,差越多代表 Standard motion type 的影響越大,
    PC 端的 `--min-seg` 就要調越大。
 
-3. **`sugar_server` + PC 連線** —— 驗證 Ethernet 與協定。手臂在空中
+3. **`sugar_main` + PC 連線** —— 驗證 Ethernet 與協定。手臂在空中
    把整個字「畫」一次,看動作順不順、會不會超出行程、姿態有沒有突變。
 
 4. **DO 訊號時序** —— `sugar_test` step 3,用示教器的 IO 監看畫面看
@@ -178,9 +178,11 @@ acc,n              精度 mm(立即)
 end                收工
 ```
 
-一個封包用換行塞多個動作,上限 250 字元。手臂每收一包回 `OK` 或 `ER`。
-兩邊都不加換行當封包結尾 —— AS 的 `TCP_SEND` 不會補 `\n`,
-用 `readline()` 等換行會卡死,framing 靠「送一包就等回覆」。
+一個封包塞多個動作,每行以 `\n` 結尾,整包再多一個空行(以 `\n\n` 收尾)。
+手臂看到 `\n\n` 才算收完一包,所以封包可以超過 255 字(PC 端預設仍 250 以相容 Demo2,用 `--maxlen` 加大),
+單行上限 64 字。手臂每包只回一次 `OK` 或 `ER,<指令>`。
+回覆方向不加換行 —— AS 的 `TCP_SEND` 不會補 `\n`,
+PC 用 `readline()` 等換行會卡死,回覆的 framing 靠「送一包就等回覆」。
 
 **手臂程式是固定的。** `sugar_server.as` 載進控制器就不用再改 ——
 它做的事只有一件:收 Ethernet 字串,照字串講的去動。

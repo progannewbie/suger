@@ -126,13 +126,19 @@ def run_server(arm, port):
     print(f"模擬手臂監聽 :{port}  等 stream.py 連進來…", flush=True)
     c, a = srv.accept()
     print(f"連線來自 {a}", flush=True)
-    n = 0
+    import stream
+    n, buf = 0, ""
     while True:
-        data = c.recv(4096)
-        if not data:
-            break
+        # 跟手臂端一樣:收到 "\n\n" 才算一包,中間可能分好幾次到
+        pkt, buf = stream.unpack(buf)
+        if pkt is None:
+            data = c.recv(4096)
+            if not data:
+                break
+            buf += data.decode("ascii", "replace")
+            continue
         n += 1
-        alive = arm.cmd(data.decode("ascii", "replace").strip())
+        alive = arm.cmd(pkt)
         c.sendall(b"OK")
         if not alive:
             break
