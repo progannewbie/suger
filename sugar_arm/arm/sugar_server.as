@@ -10,7 +10,8 @@
 ;
 ; Run sequence (teapot):
 ;   wait for PC -> JMOVE star -> LMOVE org -> WAIT SIG(startsig)
-;   -> run the PC lines until "end" -> LMOVE star (pot upright).
+;   -> run the PC lines until "end" -> turn pot upright in place
+;   -> LMOVE star.
 ; The PC plans for a teapot: one continuous path that starts at org,
 ; no sig, no stop in the middle.  sig is kept for a valve, unused now.
 ;
@@ -112,7 +113,7 @@
     END
   END
 
-; normal end: back to star so the pot stands upright and stops pouring
+; normal end: stand the pot upright in place, then back to star
   IF quit <> 0 THEN
     CALL sub_park
   END
@@ -168,6 +169,8 @@
   prepv = 100                ; mm/s for star -> org
   startsig = 2026            ; wait for this signal at org before drawing
                              ; ("sugar is pouring").  0 = do not wait.
+  parkv = 100                ; mm/s while turning the pot upright at the
+                             ; end (sub_park).  Faster = less drip.
 
 ; ---------- motion defaults ----------
   SPEED 100 MM/S ALWAYS      ; until the PC sends its own speed
@@ -431,8 +434,20 @@
 
 .PROGRAM sub_park()
 ; The PC sent "end" after lifting with ldepart.  A tilted teapot keeps
-; pouring, so return to star: that pose holds the pot upright.
+; pouring, so FIRST stand it upright where it is, THEN leave.  Going
+; straight to star would tilt back while moving and drip a trail.
+;
+; Upright = star's orientation (o, a, t).  Keep the current x, y, z and
+; take o, a, t from star: the TCP (spout) stays put, only the pot turns.
   BREAK
+  SPEED parkv MM/S ALWAYS
+  POINT pkcur = HERE
+  DECOMPOSE pkc[0] = pkcur
+  DECOMPOSE pks[0] = star
+  POINT pkup = TRANS(pkc[0], pkc[1], pkc[2], pks[3], pks[4], pks[5])
+  LMOVE pkup
+  BREAK                      ; really upright before moving away
+  PRINT "pot upright, going back to star"
   SPEED prepv MM/S ALWAYS
   LMOVE star
   BREAK

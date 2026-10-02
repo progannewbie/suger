@@ -184,7 +184,9 @@ def main():
         n = run_offline(arm, lines)
         src = f"{n} 個動作(離線,完全沒用到網路)"
 
-    arm.emit("  ; after end (controller side): BREAK, LMOVE star - pot upright")
+    arm.emit("  ; sub_park (controller side): pot upright in place, then leave")
+    arm.emit("  BREAK")
+    arm.emit("  LMOVE pkup        ; HERE x,y,z + star o,a,t")
     arm.emit("  BREAK")
     arm.emit("  LMOVE star")
     arm.emit(".END")

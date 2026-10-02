@@ -188,7 +188,7 @@ PC 用 `readline()` 等換行會卡死,回覆的 framing 靠「送一包就等�
 (確認巧克力倒得出來)→ 才開始讀 PC 的指令畫圖。只在第一次連線時走一次,
 中途斷線重連不會再回 star。訊號號碼、移動速度在 `sugar_init` 的 `startsig`、`prepv`。
 因此第一包的 `OK` 會等很久,`stream.py` 第一包預設等 600 秒(`--start-timeout`)。
-收到 `end` 後手臂 `LMOVE star` 把壺轉正斷流。
+收到 `end` 後手臂先在原地把壺轉正(位置不動,角度換成 star 的),再 `LMOVE star` 離開;轉正速度是 `sugar_init` 的 `parkv`。
 
 **一律茶壺模式。** 茶壺沒有閥,傾斜就一直流,所以 `plan.py` 產生的計畫:
 - 不送 `sig`;路徑中間沒有 `brk` / `wait`(停一下就是一坨糖),只在最後抬起時停一次
@@ -241,7 +241,7 @@ $PY sugar_arm/sim.py motion.json --trace trace.as --plot sim.png
 | 開始(手臂端) | `JMOVE star` → `LMOVE org` → `WAIT SIG(2026)` |
 | 整條路徑 | `LMOVE` |
 | 畫完 | `LDEPART` 抬起 → `BREAK` |
-| 結束(手臂端) | `LMOVE star` 壺轉正 |
+| 結束(手臂端) | 原地轉正(`HERE` 的位置 + `star` 的角度)→ `LMOVE star` |
 
 `APPRO` / `DEPART` 沿的是**工具 Z 軸**不是 base Z,所以退刀保證沿噴嘴軸垂直,
 不會斜著刮到剛畫好的糖。
