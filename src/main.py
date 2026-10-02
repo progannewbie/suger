@@ -41,7 +41,7 @@ SA = HERE.parent / "sugar_arm"
 SCRIPTS = ("img2path.py", "text2path.py", "svg2points.py", "plan.py", "sim.py")
 GLYPHS = SA / "data" / "graphics.txt"
 GLYPHS_URL = "https://raw.githubusercontent.com/skishore/makemeahanzi/master/graphics.txt"
-ARM_IP = "192.168.5.3"      # 控制器 sugar_main 監聽 10000 埠
+ARM_IP = "192.168.5.3"      # 控制器 sugar_main 監聽 20000 埠(10000 在這台 E 控制器會 E4027)
 
 IMAGE_TYPES = [("圖片", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"), ("所有檔案", "*.*")]
 

@@ -140,7 +140,7 @@
 ; =====================================================================
 
 ; ---------- communication ----------
-  port = 10000               ; listen port, must be 8192-65535
+  port = 20000               ; listen port.  10000 gives E4027 on this E controller
   tmo  = 30                  ; comms timeout seconds, manual max 60
   $eol = $CHR(10)            ; line end; an empty line ends the packet
   rmax = 190                 ; chars per TCP_RECV element (1-255)

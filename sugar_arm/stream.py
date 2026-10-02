@@ -150,7 +150,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("json", nargs="?", help="Skill 3 (plan.py) 的 motion.json")
     ap.add_argument("--host", default="192.168.5.3")
-    ap.add_argument("--port", type=int, default=10000)
+    ap.add_argument("--port", type=int, default=20000)
     ap.add_argument("--dry-run", action="store_true", help="只印字串,不連線")
     ap.add_argument("--fake-server", action="store_true")
     ap.add_argument("--maxlen", type=int, default=MAXLEN,
