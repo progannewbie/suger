@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """糖畫線路圖產生器 —— 上傳圖片或輸入中文字,一路跑完 Skill 1 → 2 → 3。
 
+一律茶壺模式:圖片固定一筆到底,文字預設草書(整幅一筆),
+動作計畫起點對齊 org、中途不停不抬筆。按「送到手臂」用 stream.py 送出。
+
   Skill 1  sugar-stroke   ../sugar_arm/img2path.py    圖片 → 單線筆劃 SVG
                           ../sugar_arm/text2path.py   中文字 → 毛筆筆劃 SVG
   Skill 2  sugar-points   ../sugar_arm/svg2points.py  SVG → 手臂座標點位
@@ -38,6 +41,7 @@ SA = HERE.parent / "sugar_arm"
 SCRIPTS = ("img2path.py", "text2path.py", "svg2points.py", "plan.py", "sim.py")
 GLYPHS = SA / "data" / "graphics.txt"
 GLYPHS_URL = "https://raw.githubusercontent.com/skishore/makemeahanzi/master/graphics.txt"
+ARM_IP = "192.168.5.3"      # 控制器 sugar_main 監聽 10000 埠
 
 IMAGE_TYPES = [("圖片", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"), ("所有檔案", "*.*")]
 
@@ -99,9 +103,8 @@ def stroke_stage(kind, source, f, opt):
         if opt["vertical"]:
             args.append("--vertical")
         return run_script("text2path.py", *args)
-    args = [source, "--width", opt["width"], *out]
-    if opt["one_stroke"]:
-        args.append("--one-stroke")
+    # 茶壺模式:糖一直在流,只能一筆到底
+    args = [source, "--width", opt["width"], "--one-stroke", *out]
     if opt["invert"]:
         args.append("--invert")
     return run_script("img2path.py", *args)
@@ -182,9 +185,6 @@ class App(tk.Tk):
         self.width_var = tk.StringVar(value="110")
         ttk.Spinbox(g1, from_=20, to=400, increment=10, width=5,
                     textvariable=self.width_var).pack(side="left", padx=(4, 10))
-        self.one_stroke_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(g1, text="一筆到底",
-                        variable=self.one_stroke_var).pack(side="left", padx=(0, 10))
         self.invert_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(g1, text="黑白反轉", variable=self.invert_var).pack(side="left")
 
@@ -198,7 +198,8 @@ class App(tk.Tk):
         self.cols_var = tk.StringVar(value="0")
         ttk.Spinbox(g2, from_=0, to=20, increment=1, width=4,
                     textvariable=self.cols_var).pack(side="left", padx=(4, 10))
-        self.link_var = tk.StringVar(value="行書(字內連筆)")
+        # 茶壺模式預設整幅一筆;選其他書體時,筆劃之間的接線也會畫出來
+        self.link_var = tk.StringVar(value="草書(整幅一筆)")
         ttk.Combobox(g2, textvariable=self.link_var, values=list(LINKS),
                      state="readonly", width=14).pack(side="left", padx=(0, 10))
         self.vertical_var = tk.BooleanVar(value=False)
@@ -212,7 +213,13 @@ class App(tk.Tk):
                     textvariable=self.speed_var).pack(side="left", padx=(4, 10))
         ttk.Label(g3, text="畫布原點 x,y,z[,o,a,t]").pack(side="left")
         self.base_var = tk.StringVar(value="")
-        ttk.Entry(g3, textvariable=self.base_var, width=22).pack(side="left", padx=(4, 0))
+        ttk.Entry(g3, textvariable=self.base_var, width=22).pack(side="left", padx=(4, 10))
+        ttk.Label(g3, text="手臂 IP").pack(side="left")
+        self.ip_var = tk.StringVar(value=ARM_IP)
+        ttk.Entry(g3, textvariable=self.ip_var, width=13).pack(side="left", padx=(4, 6))
+        self.send_btn = ttk.Button(g3, text="送到手臂", command=self.send_to_arm,
+                                   state="disabled")
+        self.send_btn.pack(side="left")
 
         self.status = tk.StringVar(value="上傳圖片,或輸入中文字後按「寫字」")
         ttk.Label(self, textvariable=self.status, padding=(8, 0)).pack(fill="x")
@@ -337,7 +344,6 @@ class App(tk.Tk):
         return {"width": f"{width:g}", "size": f"{size:g}", "speed": f"{speed:g}",
                 "cols": cols, "link": LINKS[self.link_var.get()],
                 "vertical": self.vertical_var.get(), "base": base,
-                "one_stroke": self.one_stroke_var.get(),
                 "invert": self.invert_var.get()}
 
     def convert(self):
@@ -356,6 +362,7 @@ class App(tk.Tk):
         self.log.delete("1.0", "end")
         self.tabs.select(0)
         self.run_btn.config(state="disabled")
+        self.send_btn.config(state="disabled")
         self.status.set("Skill 1 線路圖 處理中…")
         # 三段加起來可能要十幾秒,放背景執行緒才不會把視窗卡住
         threading.Thread(target=self._worker, args=(kind, src, self.run_dir, opt),
@@ -384,12 +391,65 @@ class App(tk.Tk):
     def _finished(self, kind, done):
         self.run_btn.config(state="normal")
         if done == len(TABS):
+            self.send_btn.config(state="normal")
             self.status.set(f"全部完成,已存到 {self.run_dir}  "
-                            "(3_motion.json 可直接給 stream.py 送手臂)")
+                            "(確認無誤後按「送到手臂」)")
         elif done == 0 and kind == "image":
             self.status.set("第 1 步失敗,請看下方訊息(白線黑底可勾「黑白反轉」)")
         else:
             self.status.set(f"第 {done + 1} 步失敗,請看下方訊息")
+
+    # ---------- 送手臂 ----------
+    def send_to_arm(self):
+        motion = self.run_dir / "3_motion.json" if self.run_dir else None
+        if not motion or not motion.exists():
+            messagebox.showinfo("送到手臂", "請先產生動作計畫")
+            return
+        ip = self.ip_var.get().strip()
+        if not messagebox.askokcancel(
+                "送到手臂",
+                f"手臂會開始動作。\n\n"
+                f"確認:\n"
+                f"  1. 控制器已在執行 sugar_main\n"
+                f"  2. 手臂在 star 附近、周圍淨空\n\n"
+                f"送出後手臂會走 star → org,等訊號 2026(巧克力倒出)才開始畫,\n"
+                f"畫完抬起並回 star 把壺轉正。\n"
+                f"送往 {ip}"):
+            return
+        self.send_btn.config(state="disabled")
+        self.run_btn.config(state="disabled")
+        self._append_log("送到手臂", f"{motion}\n-> {ip}")
+        self.status.set("連線手臂中…")
+        threading.Thread(target=self._send_worker, args=(motion, ip), daemon=True).start()
+
+    def _send_worker(self, motion, ip):
+        # 不用 run_script:stream.py 要等開始訊號,可能很久,輸出要邊跑邊顯示
+        cmd = [sys.executable, "-u", str(SA / "stream.py"), str(motion), "--host", ip]
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, encoding="utf-8", errors="replace",
+                                 env=env, cwd=SA)
+            for line in p.stdout:
+                line = line.rstrip()
+                if line:
+                    self.after(0, self._send_line, line)
+            ok = p.wait() == 0
+        except Exception as e:
+            self.after(0, self._send_line, f"執行失敗:{e}")
+            ok = False
+        self.after(0, self._send_done, ok)
+
+    def _send_line(self, line):
+        self.log.insert("end", line + "\n")
+        self.log.see("end")
+        self.status.set(line)
+
+    def _send_done(self, ok):
+        self.log.insert("end", "\n")
+        self.send_btn.config(state="normal")
+        self.run_btn.config(state="normal")
+        self.status.set("已全部送給手臂" if ok else "送出失敗,請看下方訊息")
 
     def open_out_dir(self):
         target = self.run_dir if self.run_dir and self.run_dir.exists() else OUT_DIR

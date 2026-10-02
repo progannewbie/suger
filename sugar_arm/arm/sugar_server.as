@@ -8,6 +8,12 @@
 ;                Edit numbers there, never in sugar_main.
 ;   sub_*        helpers, not meant to be run on their own.
 ;
+; Run sequence (teapot):
+;   wait for PC -> JMOVE star -> LMOVE org -> WAIT SIG(startsig)
+;   -> run the PC lines until "end" -> LMOVE star (pot upright).
+; The PC plans for a teapot: one continuous path that starts at org,
+; no sig, no stop in the middle.  sig is kept for a valve, unused now.
+;
 ; Receives one motion per line over TCP and executes it immediately.
 ; Knows nothing about sugar / strokes / brush - the PC decides all of
 ; that and sends plain strings.  This program never needs to change.
@@ -65,12 +71,13 @@
 
   CALL sugar_init
 
-; Nothing moves until a command arrives; the arm must not jump anywhere
-; just because the program was started.
+; Nothing moves until the PC is connected; then sub_prep runs the
+; teapot start sequence (star -> org -> wait startsig) once.
 ; runtime state, reset on every start (not settings, so not in init)
   lastv = -1
   quit  = 0
   sigon = 0                  ; valve signal currently ON, 0 = closed
+  prepped = 0                ; start sequence done for this run
 
 ; ---------- open the listening port once ----------
   ret = 999
@@ -88,6 +95,12 @@
   WHILE quit == 0 DO
     CALL sub_accept
     lost = 0
+; start sequence only on the first connection.  A reconnect mid job
+; must not send the arm back to star across the drawing.
+    IF prepped == 0 THEN
+      CALL sub_prep
+      prepped = 1
+    END
     WHILE (quit == 0) AND (lost == 0) DO
       CALL sub_packet
     END
@@ -97,6 +110,11 @@
     IF lost <> 0 THEN
       CALL sub_safe
     END
+  END
+
+; normal end: back to star so the pot stands upright and stops pouring
+  IF quit <> 0 THEN
+    CALL sub_park
   END
 
 900 ret = 999
@@ -144,6 +162,12 @@
 ; Kept as to1[1] because org_teach and other programs use that name.
   POINT to1[1] = TRANS(0, 80, 130, 0, 0, 0)
   TOOL to1[1]
+
+; ---------- teapot start sequence (sub_prep) ----------
+; star and org are taught poses, not set here.
+  prepv = 100                ; mm/s for star -> org
+  startsig = 2026            ; wait for this signal at org before drawing
+                             ; ("sugar is pouring").  0 = do not wait.
 
 ; ---------- motion defaults ----------
   SPEED 100 MM/S ALWAYS      ; until the PC sends its own speed
@@ -386,6 +410,35 @@
   END
 .END
 
+.PROGRAM sub_prep()
+; Teapot start sequence, once per run, AFTER the PC has connected:
+;   star -> org -> wait for startsig -> return, drawing starts.
+; startsig means "chocolate is pouring", so drawing must begin the
+; moment it comes.  That is why this runs only once the PC is already
+; connected: its first packet is waiting in the buffer and is read
+; straight away.  The PC must allow a long wait for that first OK.
+  SPEED prepv MM/S ALWAYS
+  JMOVE star
+  LMOVE org
+  BREAK                      ; really at org before watching the signal
+  IF startsig <> 0 THEN
+    PRINT "at org, waiting for signal ", startsig
+    WAIT SIG(startsig)
+    PRINT "signal ", startsig, " on, start drawing"
+  END
+  lastv = -1                 ; force the PC speed on the next move
+.END
+
+.PROGRAM sub_park()
+; The PC sent "end" after lifting with ldepart.  A tilted teapot keeps
+; pouring, so return to star: that pose holds the pot upright.
+  BREAK
+  SPEED prepv MM/S ALWAYS
+  LMOVE star
+  BREAK
+  PRINT "done, back at star"
+.END
+
 .PROGRAM sub_safe()
 ; Link dropped mid job.  Let the queued motion finish, then shut the
 ; sugar valve so it does not keep pouring.  The arm is NOT moved: the
@@ -432,6 +485,8 @@
 	; 0:sub_send:F
 	; 0:sub_ok:F
 	; 0:sub_err:F
+	; 0:sub_prep:F
+	; 0:sub_park:F
 	; 0:sub_safe:F
 	; @@@ TRANS @@@
 	; @@@ JOINTS @@@

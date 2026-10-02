@@ -64,7 +64,7 @@ $PY sugar_arm/plan.py points.json -o motion.json --base 450,0,-120 --draw-speed 
 $PY sugar_arm/stream.py motion.json --dry-run
 
 # 實際送給手臂
-$PY sugar_arm/stream.py motion.json --host 192.168.0.2
+$PY sugar_arm/stream.py motion.json --host 192.168.5.3
 ```
 
 `--link` 決定書體:
@@ -179,10 +179,25 @@ end                收工
 ```
 
 一個封包塞多個動作,每行以 `\n` 結尾,整包再多一個空行(以 `\n\n` 收尾)。
-手臂看到 `\n\n` 才算收完一包,所以封包可以超過 255 字(PC 端預設仍 250 以相容 Demo2,用 `--maxlen` 加大),
+手臂看到 `\n\n` 才算收完一包,所以封包可以超過 255 字(PC 端預設仍 250,實機驗證過再用 `--maxlen` 加大),
 單行上限 64 字。手臂每包只回一次 `OK` 或 `ER,<指令>`。
 回覆方向不加換行 —— AS 的 `TCP_SEND` 不會補 `\n`,
 PC 用 `readline()` 等換行會卡死,回覆的 framing 靠「送一包就等回覆」。
+
+**開始流程(茶壺)**:PC 連上後,手臂 `JMOVE star` → `LMOVE org` → 等訊號 2026
+(確認巧克力倒得出來)→ 才開始讀 PC 的指令畫圖。只在第一次連線時走一次,
+中途斷線重連不會再回 star。訊號號碼、移動速度在 `sugar_init` 的 `startsig`、`prepv`。
+因此第一包的 `OK` 會等很久,`stream.py` 第一包預設等 600 秒(`--start-timeout`)。
+收到 `end` 後手臂 `LMOVE star` 把壺轉正斷流。
+
+**一律茶壺模式。** 茶壺沒有閥,傾斜就一直流,所以 `plan.py` 產生的計畫:
+- 不送 `sig`;路徑中間沒有 `brk` / `wait`(停一下就是一坨糖),只在最後抬起時停一次
+- 不抬筆、不空中移動;多筆劃首尾相接成一筆,接線也會畫出來(會印出總長)
+- 圖整張平移讓**第一點就是 org**,等訊號時倒在 org 的那攤糖就當起筆
+  (`--keep-center` 改回置中,但會從 org 拉一條線到起點)
+- 線寬仍靠速度控制(流量固定,線寬 × 速度 = 常數)
+
+`src/main.py` 因此圖片固定「一筆到底」、文字預設「草書(整幅一筆)」。
 
 **手臂程式是固定的。** `sugar_server.as` 載進控制器就不用再改 ——
 它做的事只有一件:收 Ethernet 字串,照字串講的去動。
@@ -219,14 +234,14 @@ $PY sugar_arm/sim.py motion.json --trace trace.as --plot sim.png
 
 ## 動作型態
 
-只用兩種插補:直線畫圖,關節趕路。
+茶壺模式只剩一種畫法:整條路徑 `LMOVE` 貼著畫布走到底。
 
 | 情況 | 指令 |
 |---|---|
-| 筆劃內的每一段 | `LMOVE` |
-| 移到下一筆起點上方 | `LAPPRO`(預設) / `JAPPRO`(`--air-move jmove`) |
-| 下筆 | `LMOVE` |
-| 抬筆 | `LDEPART` |
+| 開始(手臂端) | `JMOVE star` → `LMOVE org` → `WAIT SIG(2026)` |
+| 整條路徑 | `LMOVE` |
+| 畫完 | `LDEPART` 抬起 → `BREAK` |
+| 結束(手臂端) | `LMOVE star` 壺轉正 |
 
 `APPRO` / `DEPART` 沿的是**工具 Z 軸**不是 base Z,所以退刀保證沿噴嘴軸垂直,
 不會斜著刮到剛畫好的糖。

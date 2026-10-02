@@ -11,7 +11,7 @@
   sig,n / wait,t / brk / base,x,y,z,o,a,t / acc,n / end
 
 用法:
-  python stream.py motion.json --host 192.168.0.2
+  python stream.py motion.json --host 192.168.5.3
   python stream.py motion.json --dry-run           # 只印字串,不連線
   python stream.py --fake-server                   # 起一個假手臂測協定
 """
@@ -24,8 +24,8 @@ import argparse, json, socket, sys, time
 # (rmax 190 + maxline 64 <= 255,AS 字串上限)。
 EOP = "\n\n"
 MAXLINE = 64
-# 預設仍是 250:Demo2 的 pot_server.as 是舊版收法,只讀 $rbuf[0],
-# 超過 255 會被截斷。新版 sugar_server.as 實機驗證過後可用 --maxlen 加大;
+# 預設仍是 250:每包都落在單一 $rbuf 元素內,手臂端「跨元素接行」那段
+# 還沒上機驗證,先不走到它。實機確認過後可用 --maxlen 加大;
 # 一包越大,手臂執行完才回 OK 越久,PC 等回覆的逾時是 30 秒。
 MAXLEN = 250
 
@@ -82,19 +82,31 @@ class Link:
     回覆方向沒有結尾 —— AS 端的 TCP_SEND 把字串原樣送出,不會補 \\n,
     用 readline() 等換行會直接卡死。回覆的 framing 靠「送完就等回覆」。
     """
-    def __init__(self, host, port, dry, timeout=30.0):
+    def __init__(self, host, port, dry, timeout=30.0, start_timeout=600.0):
         self.dry, self.n, self.s = dry, 0, None
+        self.timeout, self.start_timeout = timeout, start_timeout
         if not dry:
             self.s = socket.create_connection((host, port), timeout=timeout)
-            self.s.settimeout(timeout)
 
     def send(self, pkt):
         self.n += 1
         if self.dry:
             print(pkt)
             return
+        # 第一包的 OK 要等手臂走 star -> org、再等開始訊號(倒出巧克力),
+        # 可能等很久;之後每包照常 30 秒。
+        first = self.n == 1
+        if first:
+            print(f"等手臂走到 org 並收到開始訊號(最多 {self.start_timeout:g} 秒)…",
+                  flush=True)
+        self.s.settimeout(self.start_timeout if first else self.timeout)
         self.s.sendall(pkt.encode("ascii"))
-        rep = self.s.recv(64).decode("ascii", "replace").strip()
+        try:
+            rep = self.s.recv(64).decode("ascii", "replace").strip()
+        except socket.timeout:
+            sys.exit("手臂沒有回覆" + ("(沒等到開始訊號?)" if first else ""))
+        if first:
+            print("開始畫", flush=True)
         if not rep.startswith("OK"):
             sys.exit(f"手臂回覆 {rep!r},封包開頭 {pkt[:48]!r}")
 
@@ -137,12 +149,14 @@ def fake_server(port):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("json", nargs="?", help="Skill 3 (plan.py) 的 motion.json")
-    ap.add_argument("--host", default="192.168.0.2")
+    ap.add_argument("--host", default="192.168.5.3")
     ap.add_argument("--port", type=int, default=10000)
     ap.add_argument("--dry-run", action="store_true", help="只印字串,不連線")
     ap.add_argument("--fake-server", action="store_true")
     ap.add_argument("--maxlen", type=int, default=MAXLEN,
-                    help=f"每包字元上限,預設 {MAXLEN}(相容舊版 pot_server.as)")
+                    help=f"每包字元上限,預設 {MAXLEN}(實機驗證過再加大)")
+    ap.add_argument("--start-timeout", type=float, default=600.0,
+                    help="第一包等 OK 的秒數:手臂走到 org 並等開始訊號 2026")
     v = ap.parse_args()
 
     if v.fake_server:
@@ -154,7 +168,7 @@ def main():
     lines = to_lines(d)
     pkts = pack(lines, v.maxlen)
 
-    link = Link(v.host, v.port, v.dry_run)
+    link = Link(v.host, v.port, v.dry_run, start_timeout=v.start_timeout)
     t0 = time.time()
     for p in pkts:
         link.send(p)

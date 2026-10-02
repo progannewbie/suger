@@ -25,8 +25,11 @@ class Arm:
         self.vtrav = vtrav
         self.base = (450.0, 0.0, -120.0, 0.0, 180.0, 0.0)
         self.trace, self.path, self.t = [], [], 0.0
-        self.here = None
-        self.pen = False
+        # 手臂端 sub_prep 走完 star -> org、等到訊號才開始收指令,
+        # 所以第一個動作的起點就是 org,而且糖已經在流
+        self.here = (0.0, 0.0)
+        self.path.append((0.0, 0.0, vdraw, True))
+        self.pen = True
         self.lastv = -1
         self.n = {}
 
@@ -61,6 +64,8 @@ class Arm:
             x, y, z, v = (float(q) for q in f[1:5])
             self._speed(v)
             AS = "LMOVE" if c == "lmove" else "JMOVE"
+            # 茶壺一直在流:貼著畫布(z=0)走的每一段都會留下糖
+            self.pen = z == 0
             dt = self._go(x, y, v) + (abs(z) / v if z else 0.0)
             self.emit(f"  {AS} SHIFT(base BY {x:.2f},{y:.2f},{z:g})", dt, AS)
         elif c == "ldepart":
@@ -163,6 +168,11 @@ def main():
 
     arm = Arm(v.zup, v.signal, 60, 300, 3)
     arm.emit(".PROGRAM sugar_replay()")
+    arm.emit("  ; sub_prep (controller side, not timed)")
+    arm.emit("  JMOVE star")
+    arm.emit("  LMOVE org")
+    arm.emit("  BREAK")
+    arm.emit("  WAIT SIG(2026)")
 
     if v.serve:
         n = run_server(arm, v.port)
@@ -174,6 +184,9 @@ def main():
         n = run_offline(arm, lines)
         src = f"{n} 個動作(離線,完全沒用到網路)"
 
+    arm.emit("  ; after end (controller side): BREAK, LMOVE star - pot upright")
+    arm.emit("  BREAK")
+    arm.emit("  LMOVE star")
     arm.emit(".END")
     open(v.trace, "w", encoding="utf-8").write("\n".join(arm.trace) + "\n")
 
